@@ -1,0 +1,2466 @@
+
+                   6502 Macro Assembler   -   Version 4.00f 
+                Copyright (C) 1985 by 2500 A.D. Software, Inc.
+
+
+                         ***** Active Commands *****
+
+                           Ctrl S = Stop Output
+                           Ctrl Q = Start Output
+                           Esc  C = Stop Assembly
+                           Esc  T = Terminal Output
+                           Esc  P = Printer Output
+                           Esc  D = Disk Output
+                           Esc  M = Multiple Output
+                           Esc  N = No Output
+
+
+  Tue Dec 29 2015 18:32                                                                                                  Page    1
+
+
+
+
+
+
+
+               2500 A.D. 6502 Macro Assembler  -  Version 4.00f
+               ------------------------------------------------
+
+                       Input  Filename : jsm-edit.asm
+                       Output Filename : jsm-edit.obj
+
+
+    1                           ;Jet Set Miner level editor
+    2                           
+    3          2A00             codebase     equ $2a00
+    4                           
+    5   29EA                                   org codebase-22
+    6                           
+    7                           ;****************************************
+    8                           ; Header for Atom emulator Wouter Ras
+    9   29EA   45 44 49 54 4F                    .db "EDITOR          "
+        29EF   52 20 20 20 20 
+        29F4   20 20 20 20 20 
+        29F9   20 
+   10   29FA   002A                              .dw codebase
+   11   29FC   002A                              .dw codebase
+   12   29FE   5A10                              .dw eind_asm-start_asm
+   13                           ;****************************************
+   14   2A00                    start_asm    
+   15   2A00                                   include macros.inc
+   16                           PRTTEXT .MACRO text,xpos,ypos,length
+   17                                   lda #(xpos+<$8000)      ;X=11 Y=13
+   18                                   sta tmp
+   19                                   lda #(ypos+>$8000)
+   20                                   sta tmp+1
+   21                                   ldy #0
+   22                           
+   23                                   ldx #0       
+   24                           dotitl#
+   25                                   lda title,x      ;Title text is just bitmap saying 'PRESS FIRE'
+   26                                   sta (tmp),y
+   27                                   tya
+   28                                   clc
+   29                                   adc #$20
+   30                                   tay
+   31                                   bne noinc#
+   32                                   inc tmp 
+   33                           noinc#
+   34                                   inx
+   35                                   cpx #(length*8)
+   36                                   bne dotitl#
+   37                           .MACEND       
+   38                           
+   39                           PLOTSPRITE .MACRO nr,xpos,ypos
+   40                                   lda #nr       
+   41                                   ldx #xpos
+   42                                   ldy #ypos
+   43                                   jsr drawspr
+   44                           .MACEND
+   45                           
+   46   2A00                                   include editor.inc
+   47                           ;========================================================================
+   48                           ;DECLARE SPACE
+   49                           ;========================================================================
+   50                           
+   51                           ;--- Local variables ----------------------------------------------------
+   52                           
+   53          0060             tmp         equ $60
+   54                           
+   55                           ;--- Global variables ---------------------------------------------------
+   56                           
+   57          0080             WSP         equ $80
+   58          0081             SPR_ACT     equ WSP+1
+   59          0082             XPTR        equ WSP+2
+   60          0083             YPTR        equ WSP+3
+   61          0084             CNT_KEY     equ WSP+4
+   62          0086             XBYTE       equ WSP+6
+   63          0087             YBYTE       equ WSP+7
+   64          0088             LEVEL       equ WSP+8
+   65          0089             KEY_FLAG    equ WSP+9
+   66          008A             DOOR_FLAG   equ WSP+10
+   67                           ;ENE_FLAG    equ WSP+11
+   68          008C             LEV_HEAD    equ WSP+12
+   69          008E             QUIT_FLAG   equ WSP+14
+   70                           
+   71                           ;--- Systemcalls --------------------------------------------------------
+   72                           
+   73          8000             SCRBASE     equ $8000
+   74          F7D1             OSTEXT      equ $f7d1
+   75          FFF4             OSWRCH      equ $fff4
+   76          FE66             WAITSYNC    equ $fe66
+   77          FE71             GETKEY      equ $fe71
+   78          FB81             WAIT_HSEC   equ $fb81
+   79          FFE0             LOADVEC     equ $ffe0
+   80          FFDD             SAVEVEC     equ $ffdd
+   81          B000             MODESEL     equ $b000
+   82          B001             SHIFTKEY    equ $b001
+   83                           
+   84                           ;--- Data storage -------------------------------------------------------
+   85                           
+   86          3A4E             jsm_data    equ $3a4e
+   87          5000             data_adr    equ $5000
+   88                           
+   89          5C00             load_adr    equ data_adr+$c00 ; Pointers to game headers
+   90          5C10             hdr_ptr     equ data_adr+$c10 ; Level headers
+   91          5C88             level_dat   equ data_adr+$c88 ; Compressed data
+   92                           
+   93                           ;--- Init vars ----------------------------------------------------------
+   94                           
+   95   2A00   A9 00                    lda #0
+   96   2A02   85 82                    sta XPTR          ;X-pos cursor
+   97   2A04   85 83                    sta YPTR          ;Y-pos cursor
+   98   2A06   85 88                    sta LEVEL         ;Level counter
+   99   2A08   85 84                    sta CNT_KEY       ;Key counter
+  100   2A0A   85 81                    sta SPR_ACT       ;Active tile nr
+  101   2A0C   85 89                    sta KEY_FLAG      ;Set for key move
+  102   2A0E   85 8A                    sta DOOR_FLAG     ;Set for door move
+  103   2A10   85 8E                    sta QUIT_FLAG     ;Quit flag
+  104                           
+  105                           ;========================================================================
+  106                           ;MAIN PROGRAM
+  107                           ;========================================================================
+  108                           
+  109   2A12                    start:
+  110   2A12   20 8B 2A                 jsr calc_head_ptr ;LEV_HEAD = current header address
+  111   2A15   20 B9 34                 jsr clear         ;Clear screen
+  112   2A18   20 D5 34                 jsr set_raster    ;Draw raster
+  113   2A1B   20 5E 33                 jsr drawlev       ;Draw level(LEVEL)
+  114   2A1E   20 B5 2F                 jsr mkdispb       ;Display status bar
+  115                           
+  116                           ;--- Main loop ----------------------------------------------------------
+  117                           
+  118   2A21                    main:
+  119   2A21   A6 82                    ldx XPTR          ;Cursor on
+  120   2A23   A4 83                    ldy YPTR
+  121   2A25   20 FA 39                 jsr INV_CURSOR
+  122   2A28   20 25 35                 jsr wait_time
+  123                           
+  124   2A2B   A6 82                    ldx XPTR          ;Cursor off
+  125   2A2D   A4 83                    ldy YPTR
+  126   2A2F   20 FA 39                 jsr INV_CURSOR
+  127   2A32   20 25 35                 jsr wait_time
+  128                           
+  129   2A35   A5 89                    lda KEY_FLAG      ;Moving key?
+  130   2A37   F0 0C                     beq chk_door
+  131   2A39   20 95 2B                  jsr invert_key   ;Mark key
+  132   2A3C   20 25 35                  jsr wait_time
+  133   2A3F   20 95 2B                  jsr invert_key   ;Unmark key
+  134   2A42   4C 52 2A                  jmp no_move
+  135   2A45                    chk_door:
+  136   2A45   A5 8A                    lda DOOR_FLAG     ;Moving door?
+  137   2A47   F0 09                     beq no_move
+  138   2A49   20 DA 2B                  jsr invert_door  ;Mark door
+  139   2A4C   20 25 35                  jsr wait_time
+  140   2A4F   20 DA 2B                  jsr invert_door  ;Unmark door
+  141   2A52                    no_move:
+  142   2A52   20 A0 2A                 jsr keyscan       ;Scan and execute keypress
+  143                           
+  144   2A55   A5 82                    lda XPTR          ;Print x-pos in bytes
+  145   2A57   A2 04                    ldx #4
+  146   2A59   A0 16                    ldy #22
+  147   2A5B   20 81 34                 jsr hex2dec
+  148                           
+  149   2A5E   A5 83                    lda YPTR          ;Print x-pos in bytes
+  150   2A60   A2 08                    ldx #8
+  151   2A62   A0 16                    ldy #22
+  152   2A64   20 81 34                 jsr hex2dec
+  153                           
+  154   2A67   A5 82                    lda XPTR          ;Print x-pos in pixels
+  155   2A69   0A                       asl a
+  156   2A6A   0A                       asl a
+  157   2A6B   0A                       asl a
+  158   2A6C   A2 04                    ldx #4
+  159   2A6E   A0 15                    ldy #21
+  160   2A70   20 81 34                 jsr hex2dec
+  161                           
+  162   2A73   A5 83                    lda YPTR          ;Print x-pos in pixels
+  163   2A75   0A                       asl a
+  164   2A76   0A                       asl a
+  165   2A77   0A                       asl a
+  166   2A78   A2 08                    ldx #8
+  167   2A7A   A0 15                    ldy #21
+  168   2A7C   20 81 34                 jsr hex2dec
+  169                           
+  170   2A7F   A5 8E                    lda QUIT_FLAG
+  171   2A81   D0 03                    bne quit_prog
+  172   2A83   4C 21 2A                 jmp main
+  173   2A86                    quit_prog:
+  174   2A86   A9 0C                    lda #12
+  175   2A88   4C F4 FF                 jmp OSWRCH
+  176   2A8B                       
+  177                           ;--- Calculate address level header -------------------------------------
+  178                           
+  179   2A8B                    calc_head_ptr:
+  180   2A8B   A6 88                    ldx LEVEL
+  181   2A8D   BD 98 2A                 lda hdr_ptr_lb,x
+  182   2A90   85 8C                    sta LEV_HEAD
+  183   2A92   BD 9C 2A                 lda hdr_ptr_hb,x
+  184   2A95   85 8D                    sta LEV_HEAD+1
+  185   2A97   60                       rts
+  186                           
+  187   2A98                    hdr_ptr_lb:
+  188   2A98   10 2E 4C 6A              .db <(hdr_ptr),<(hdr_ptr+30),<(hdr_ptr+60),<(hdr_ptr+90)
+  189   2A9C                    hdr_ptr_hb:
+  190   2A9C   5C 5C 5C 5C              .db >(hdr_ptr),>(hdr_ptr+30),>(hdr_ptr+60),>(hdr_ptr+90)
+  191                           
+  192                           ;========================================================================
+  193                           ;KEYSCAN
+  194                           ;========================================================================
+  195                           
+  196          001B             UP       equ $1b ; ;
+  197          001E             DOWN     equ $1e ; .
+  198          003A             LEFT     equ $3a ; Z
+  199          0038             RIGHT    equ $38 ; X
+  200          0000             ACTION   equ $00 ; Space
+  201                           
+  202          0011             TILE0    equ $11 ; 1
+  203          0012             TILE1    equ $12 ; 2
+  204          0013             TILE2    equ $13 ; 3
+  205          0014             TILE3    equ $14 ; 4
+  206                           
+  207          002B             KEY      equ $2b ; K
+  208          0024             DOOR     equ $24 ; D
+  209          002E             NEXTLEV  equ $2e ; N
+  210                           
+  211          0025             ENEM     equ $25 ; E
+  212          002C             LOAD     equ $2c ; L
+  213          0033             SAVE     equ $33 ; S
+  214          0031             QUIT     equ $31 ; Q
+  215                           
+  216          002C             L_KEY    equ $2c ; L
+  217          0032             R_KEY    equ $32 ; R
+  218          0038             X_KEY    equ $38 ; X
+  219          0039             Y_KEY    equ $39 ; Y
+  220                           
+  221          0023             CLRLEV   equ $23 ; C
+  222          003B             ESC      equ $3b ; Esc
+  223                           
+  224   2AA0                    keyscan:
+  225   2AA0   20 71 FE                 jsr GETKEY
+  226                           
+  227                           ;--- Check cursor movement ---------------------------------------------
+  228                           
+  229   2AA3                    chk_key1:
+  230   2AA3   C0 1B                    cpy #UP           ;Cursor up
+  231   2AA5   D0 07                      bne chk_key2
+  232   2AA7   A5 83                      lda YPTR
+  233   2AA9   F0 03                      beq chk_key2
+  234   2AAB   C6 83                      dec YPTR
+  235   2AAD   60                         rts
+  236   2AAE                    chk_key2:
+  237   2AAE   C0 1E                    cpy #DOWN         ;Cursor down
+  238   2AB0   D0 09                      bne chk_key3
+  239   2AB2   A5 83                      lda YPTR
+  240   2AB4   C9 13                      cmp #19
+  241   2AB6   F0 03                      beq chk_key3
+  242   2AB8   E6 83                      inc YPTR
+  243   2ABA   60                         rts
+  244   2ABB                    chk_key3:
+  245   2ABB   C0 3A                    cpy #LEFT         ;Cursor left
+  246   2ABD   D0 07                      bne chk_key4
+  247   2ABF   A5 82                      lda XPTR
+  248   2AC1   F0 03                      beq chk_key4
+  249   2AC3   C6 82                      dec XPTR
+  250   2AC5   60                         rts
+  251   2AC6                    chk_key4:
+  252   2AC6   C0 38                    cpy #RIGHT        ;Cursor right
+  253   2AC8   D0 09                      bne chk_key5
+  254   2ACA   A5 82                      lda XPTR
+  255   2ACC   C9 1F                      cmp #31
+  256   2ACE   F0 03                      beq chk_key5
+  257   2AD0   E6 82                      inc XPTR
+  258   2AD2   60                         rts
+  259                           
+  260                           ;--- Check tile selection ----------------------------------------------
+  261                           
+  262   2AD3                    chk_key5:
+  263   2AD3   C0 11                    cpy #TILE0        ;Select tile0
+  264   2AD5   D0 05                      bne chk_key6
+  265   2AD7                    set_tile0:
+  266   2AD7   A9 00                      lda #0
+  267   2AD9   4C 72 2C                   jmp clr_tileptr
+  268   2ADC                    chk_key6:
+  269   2ADC   C0 12                      cpy #TILE1      ;Select tile1
+  270   2ADE   D0 05                      bne chk_key7
+  271   2AE0   A9 01                      lda #1
+  272   2AE2   4C 72 2C                   jmp clr_tileptr
+  273   2AE5                    chk_key7:
+  274   2AE5   C0 13                    cpy #TILE2        ;Select tile2
+  275   2AE7   D0 05                      bne chk_key8
+  276   2AE9   A9 02                      lda #2
+  277   2AEB   4C 72 2C                   jmp clr_tileptr
+  278   2AEE                    chk_key8:
+  279   2AEE   C0 14                    cpy #TILE3        ;Select tile3
+  280   2AF0   D0 05                      bne chk_key9
+  281   2AF2   A9 03                      lda #3
+  282   2AF4   4C 72 2C                   jmp clr_tileptr
+  283                           
+  284                           ;--- Check moving objects ---------------------------------------------
+  285                           
+  286   2AF7                    chk_key9:
+  287   2AF7   C0 2B                    cpy #KEY          ;Move key
+  288   2AF9   D0 03                      bne chk_key10
+  289   2AFB   4C 71 2B                   jmp move_key
+  290   2AFE                    chk_key10:
+  291   2AFE   C0 24                    cpy #DOOR         ;Move door
+  292   2B00   D0 03                      bne chk_key11
+  293   2B02   4C D0 2B                   jmp move_door
+  294   2B05                    chk_key11:
+  295   2B05   C0 3B                    cpy #ESC          ;Escape
+  296   2B07   D0 09                      bne chk_key13
+  297   2B09   A9 00                      lda #0
+  298   2B0B   85 89                      sta KEY_FLAG    ;Cancel key move
+  299   2B0D   85 8A                      sta DOOR_FLAG   ;Cancel door move
+  300   2B0F   4C D7 2A                   jmp set_tile0
+  301                           
+  302                           ;--- Check show menu keys ---------------------------------------------
+  303                           
+  304   2B12                    chk_key13:
+  305   2B12   C0 2C                    cpy #LOAD         ;Load file
+  306   2B14   D0 03                      bne chk_key14
+  307   2B16   4C AB 2C                   jmp load_file
+  308   2B19                    chk_key14:
+  309   2B19   C0 33                    cpy #SAVE         ;Save file
+  310   2B1B   D0 03                      bne chk_key15
+  311   2B1D   4C 4B 2D                   jmp save_file
+  312   2B20                    chk_key15:
+  313   2B20   C0 2E                    cpy #NEXTLEV      ;Next level
+  314   2B22   D0 03                      bne chk_key16
+  315   2B24   4C 97 2C                   jmp next_level
+  316   2B27                    chk_key16:
+  317   2B27   C0 23                    cpy #CLRLEV       ;Clear level
+  318   2B29   D0 03                      bne chk_key17
+  319   2B2B   4C EF 34                   jmp clr_lev
+  320   2B2E                    chk_key17:
+  321   2B2E   C0 25                    cpy #ENEM         ;Enemies properties
+  322   2B30   D0 03                     bne chk_key19
+  323   2B32   4C 8F 30                  jmp ene_prop
+  324   2B35                    chk_key19:
+  325   2B35   C0 31                    cpy #QUIT         ;Quit
+  326   2B37   D0 03                      bne chk_key20
+  327   2B39   E6 8E                      inc QUIT_FLAG
+  328   2B3B   60                         rts
+  329                           
+  330                           ;--- Check action -----------------------------------------------------
+  331                           
+  332   2B3C                    chk_key20:
+  333   2B3C   C0 00                    cpy #ACTION       ;Space
+  334   2B3E   D0 30                      bne chk_key99
+  335   2B40   A5 81                      lda SPR_ACT
+  336   2B42   C9 04                      cmp #4          ;Moving key?
+  337   2B44   D0 03                        bne chk_act1
+  338   2B46   4C A3 2B                     jmp set_key
+  339   2B49                    chk_act1:
+  340   2B49   C9 05                      cmp #5          ;Moving door?
+  341   2B4B   D0 03                        bne chk_act3
+  342   2B4D   4C 05 2C                     jmp set_door
+  343   2B50                    chk_act3:        
+  344   2B50   A6 82                      ldx XPTR        ;Get current tilenr
+  345   2B52   A4 83                      ldy YPTR
+  346   2B54   20 14 34                   jsr getblock
+  347   2B57   A6 82                      ldx XPTR        ;Erase tile
+  348   2B59   A4 83                      ldy YPTR
+  349   2B5B   20 52 34                   jsr drawtile
+  350   2B5E   A5 81                      lda SPR_ACT     ;Update leveldata
+  351   2B60   A6 82                      ldx XPTR
+  352   2B62   A4 83                      ldy YPTR
+  353   2B64   20 1C 34                   jsr setblock
+  354   2B67   A5 81                      lda SPR_ACT     ;Set new tile
+  355   2B69   A6 82                      ldx XPTR
+  356   2B6B   A4 83                      ldy YPTR
+  357   2B6D   4C 52 34                   jmp drawtile
+  358                           
+  359                           ;--- No action for pressed key ----------------------------------------
+  360                           
+  361   2B70                    chk_key99:
+  362   2B70   60                       rts
+  363                           
+  364                           ;========================================================================
+  365                           ;K-KEY, MOVE KEY
+  366                           ;========================================================================
+  367                           
+  368                           ;--- Move selected key ------------------------------------------------
+  369                           
+  370   2B71                    move_key:
+  371   2B71   E6 84                    inc CNT_KEY
+  372   2B73   A5 84                    lda CNT_KEY
+  373   2B75   29 03                    and #3
+  374   2B77   85 84                    sta CNT_KEY
+  375   2B79   18                       clc
+  376   2B7A   69 30                    adc #$30
+  377   2B7C   A2 14                    ldx #20
+  378   2B7E   A0 16                    ldy #22
+  379   2B80   20 A7 39                 jsr PUTCHAR
+  380   2B83   A9 04                    lda #4
+  381   2B85   20 72 2C                 jsr clr_tileptr
+  382   2B88   E6 89                    inc KEY_FLAG
+  383   2B8A                    wait_release:
+  384   2B8A   20 71 FE                 jsr GETKEY
+  385   2B8D   C0 FF                    cpy #$ff
+  386   2B8F   D0 F9                    bne wait_release
+  387   2B91   4C 70 2B                 jmp chk_key99
+  388   2B94   60                       rts
+  389                           
+  390                           ;--- Invert selected key ----------------------------------------------
+  391                           
+  392   2B95                    invert_key:
+  393   2B95   A5 84                    lda CNT_KEY
+  394   2B97   0A                       asl a
+  395   2B98   A8                       tay
+  396   2B99   B1 8C                    lda (LEV_HEAD),y
+  397   2B9B   AA                       tax
+  398   2B9C   C8                       iny
+  399   2B9D   B1 8C                    lda (LEV_HEAD),y
+  400   2B9F   A8                       tay
+  401   2BA0   4C FA 39                 jmp INV_CURSOR
+  402                           
+  403                           ;--- Set selected key -------------------------------------------------
+  404                           
+  405   2BA3                    set_key:
+  406   2BA3   A5 84                    lda CNT_KEY       ;Erase old key
+  407   2BA5   0A                       asl a
+  408   2BA6   A8                       tay
+  409   2BA7   B1 8C                    lda (LEV_HEAD),y
+  410   2BA9   AA                       tax
+  411   2BAA   C8                       iny
+  412   2BAB   B1 8C                    lda (LEV_HEAD),y
+  413   2BAD   A8                       tay
+  414   2BAE   A9 04                    lda #4
+  415   2BB0   20 52 34                 jsr drawtile
+  416                           
+  417   2BB3   A9 04                    lda #4            ;Draw new key
+  418   2BB5   A6 82                    ldx XPTR
+  419   2BB7   A4 83                    ldy YPTR
+  420   2BB9   20 52 34                 jsr drawtile
+  421                           
+  422   2BBC   A5 84                    lda CNT_KEY       ;Set new key coords
+  423   2BBE   0A                       asl a
+  424   2BBF   A8                       tay
+  425   2BC0   A5 82                    lda XPTR
+  426   2BC2   91 8C                    sta (LEV_HEAD),y
+  427   2BC4   A5 83                    lda YPTR
+  428   2BC6   C8                       iny
+  429   2BC7   91 8C                    sta (LEV_HEAD),y
+  430                           
+  431   2BC9   A9 00                    lda #0            ;End key move
+  432   2BCB   85 89                    sta KEY_FLAG
+  433   2BCD   4C D7 2A                 jmp set_tile0
+  434                           
+  435                           ;========================================================================
+  436                           ;D-KEY, MOVE DOOR
+  437                           ;========================================================================
+  438                           
+  439                           ;--- Move door --------------------------------------------------------
+  440                           
+  441          0060             tmp_x     equ tmp
+  442          0061             tmp_y     equ tmp+1
+  443                           
+  444   2BD0                    move_door:
+  445   2BD0   A9 05                    lda #5
+  446   2BD2   20 72 2C                 jsr clr_tileptr
+  447   2BD5   E6 8A                    inc DOOR_FLAG
+  448   2BD7   4C 8A 2B                 jmp wait_release
+  449                           
+  450                           ;--- Invert door ------------------------------------------------------
+  451                           
+  452   2BDA                    invert_door:
+  453   2BDA   A0 08                    ldy #8
+  454   2BDC   B1 8C                    lda (LEV_HEAD),y
+  455   2BDE   85 60                    sta tmp_x
+  456   2BE0   C8                       iny
+  457   2BE1   B1 8C                    lda (LEV_HEAD),y
+  458   2BE3   85 61                    sta tmp_y
+  459   2BE5                           
+  460   2BE5   A6 60                    ldx tmp_x
+  461   2BE7   A4 61                    ldy tmp_y
+  462   2BE9   20 FA 39                 jsr INV_CURSOR
+  463   2BEC   A6 60                    ldx tmp_x
+  464   2BEE   E8                       inx
+  465   2BEF   A4 61                    ldy tmp_y
+  466   2BF1   20 FA 39                 jsr INV_CURSOR
+  467   2BF4   A6 60                    ldx tmp_x
+  468   2BF6   A4 61                    ldy tmp_y
+  469   2BF8   C8                       iny
+  470   2BF9   20 FA 39                 jsr INV_CURSOR
+  471   2BFC   A6 60                    ldx tmp_x
+  472   2BFE   E8                       inx
+  473   2BFF   A4 61                    ldy tmp_y
+  474   2C01   C8                       iny
+  475   2C02   4C FA 39                 jmp INV_CURSOR
+  476                           
+  477                           ;--- Set door ---------------------------------------------------------
+  478                           
+  479   2C05                    set_door:
+  480   2C05   A0 08                    ldy #8
+  481   2C07   B1 8C                    lda (LEV_HEAD),y
+  482   2C09   85 60                    sta tmp_x
+  483   2C0B   C8                       iny
+  484   2C0C   B1 8C                    lda (LEV_HEAD),y
+  485   2C0E   85 61                    sta tmp_y
+  486   2C10                           
+  487   2C10   A9 05                    lda #5            ;Erase door
+  488   2C12   A6 60                    ldx tmp_x
+  489   2C14   A4 61                    ldy tmp_y
+  490   2C16   20 52 34                 jsr drawtile
+  491   2C19   A9 07                    lda #7
+  492   2C1B   A6 60                    ldx tmp_x
+  493   2C1D   E8                       inx
+  494   2C1E   A4 61                    ldy tmp_y
+  495   2C20   20 52 34                 jsr drawtile
+  496   2C23   A9 06                    lda #6
+  497   2C25   A6 60                    ldx tmp_x
+  498   2C27   A4 61                    ldy tmp_y
+  499   2C29   C8                       iny
+  500   2C2A   20 52 34                 jsr drawtile
+  501   2C2D   A9 08                    lda #8
+  502   2C2F   A6 60                    ldx tmp_x
+  503   2C31   E8                       inx
+  504   2C32   A4 61                    ldy tmp_y
+  505   2C34   C8                       iny
+  506   2C35   20 52 34                 jsr drawtile
+  507                           
+  508   2C38   A9 05                    lda #5            ;Set new door
+  509   2C3A   A6 82                    ldx XPTR
+  510   2C3C   A4 83                    ldy YPTR
+  511   2C3E   20 52 34                 jsr drawtile
+  512   2C41   A9 06                    lda #6
+  513   2C43   A6 82                    ldx XPTR
+  514   2C45   E8                       inx
+  515   2C46   A4 83                    ldy YPTR
+  516   2C48   20 52 34                 jsr drawtile
+  517   2C4B   A9 07                    lda #7
+  518   2C4D   A6 82                    ldx XPTR
+  519   2C4F   A4 83                    ldy YPTR
+  520   2C51   C8                       iny
+  521   2C52   20 52 34                 jsr drawtile
+  522   2C55   A9 08                    lda #8
+  523   2C57   A6 82                    ldx XPTR
+  524   2C59   E8                       inx
+  525   2C5A   A4 83                    ldy YPTR
+  526   2C5C   C8                       iny
+  527   2C5D   20 52 34                 jsr drawtile
+  528                           
+  529   2C60   A0 08                    ldy #8
+  530   2C62   A5 82                    lda XPTR
+  531   2C64   91 8C                    sta (LEV_HEAD),y
+  532   2C66   C8                       iny
+  533   2C67   A5 83                    lda YPTR
+  534   2C69   91 8C                    sta (LEV_HEAD),y
+  535                           
+  536   2C6B   A9 00                    lda #0
+  537   2C6D   85 8A                    sta DOOR_FLAG
+  538   2C6F   4C D7 2A                 jmp set_tile0
+  539                           
+  540                           ;--- Point to selected tile -------------------------------------------
+  541                           
+  542   2C72                    clr_tileptr:
+  543   2C72   85 81                    sta SPR_ACT
+  544   2C74                    tile_upd:
+  545   2C74   20 76 39                 jsr PUTSTRING
+  546   2C77   0C 17 20 20 20           .db 12,23,'       _     ',0
+        2C7C   20 20 20 20 5F 
+        2C81   20 20 20 20 20 
+        2C86   00 
+  547   2C87   EA                       nop
+  548   2C88                    set_tileptr:
+  549   2C88   A5 81                    lda SPR_ACT
+  550   2C8A   0A                       asl a
+  551   2C8B   18                       clc
+  552   2C8C   69 0C                    adc #12
+  553   2C8E   AA                       tax
+  554   2C8F   A0 17                    ldy #23
+  555   2C91   A9 5E                    lda #'^'
+  556   2C93   20 A7 39                 jsr PUTCHAR
+  557   2C96   60                       rts
+  558                           
+  559                           ;========================================================================
+  560                           ;N-KEY, SELECT NEXT LEVEL
+  561                           ;========================================================================
+  562                           
+  563   2C97                    next_level:
+  564   2C97   E6 88                    inc LEVEL
+  565   2C99   A5 88                    lda LEVEL
+  566   2C9B   29 03                    and #3
+  567   2C9D   85 88                    sta LEVEL
+  568   2C9F                    upd_scr:
+  569   2C9F   20 8B 2A                 jsr calc_head_ptr ;LEV_HEAD = current header address
+  570   2CA2   20 D5 34                 jsr set_raster
+  571   2CA5   20 5E 33                 jsr drawlev
+  572   2CA8   4C B5 2F                 jmp mkdispb       ;Display status bar
+  573                           
+  574                           ;========================================================================
+  575                           ;L-KEY, LOAD JET SET MINER DATA FILE
+  576                           ;========================================================================
+  577                           
+  578          0060             loadadr    equ tmp
+  579                           
+  580   2CAB                    load_file:
+  581   2CAB   20 F7 2D                 jsr show_menu
+  582   2CAE   20 76 39                 jsr PUTSTRING
+  583   2CB1   0E 08 4C 4F 41           .db 14,8,'LOAD',0
+        2CB6   44 00 
+  584   2CB8   EA                       nop
+  585   2CB9                    lf0:
+  586   2CB9   20 71 FE                 jsr GETKEY
+  587   2CBC   C0 1B                    cpy #UP           ;Up
+  588   2CBE   D0 13                      bne lf2
+  589   2CC0   EE 26 2E                   inc filenr
+  590   2CC3   AD 26 2E                   lda filenr
+  591   2CC6   C9 3A                      cmp #$3a
+  592   2CC8   D0 03                      bne lf1
+  593   2CCA   CE 26 2E                   dec filenr
+  594   2CCD                    lf1:
+  595   2CCD   20 1C 2E                   jsr show_file
+  596   2CD0   4C B9 2C                   jmp lf0
+  597   2CD3                    lf2:
+  598   2CD3   C0 1E                    cpy #DOWN         ;Down
+  599   2CD5   D0 10                      bne lf4
+  600   2CD7   CE 26 2E                   dec filenr
+  601   2CDA   AD 26 2E                   lda filenr
+  602   2CDD   C9 2F                      cmp #$2f
+  603   2CDF   D0 03                      bne lf3
+  604   2CE1   EE 26 2E                   inc filenr
+  605   2CE4                    lf3:
+  606   2CE4   4C CD 2C                   jmp lf1
+  607   2CE7                    lf4:
+  608   2CE7   C0 3B                    cpy #ESC          ;Escape
+  609   2CE9   D0 03                      bne lf5
+  610   2CEB                    lf6:
+  611   2CEB   4C 9F 2C                   jmp upd_scr
+  612                           
+  613   2CEE                    lf5:
+  614   2CEE   C0 00                    cpy #ACTION       ;Space
+  615   2CF0   D0 C7                      bne lf0
+  616                           
+  617                           ;--- Load file --------------------------------------------------------
+  618                           
+  619   2CF2   A9 0C                     lda #12
+  620   2CF4   20 F4 FF                  jsr OSWRCH
+  621   2CF7   20 D1 F7                  jsr OSTEXT
+  622   2CFA   4C 4F 41 44 49            .db 'LOADING '
+        2CFF   4E 47 20 
+  623   2D02   EA                        nop
+  624                           
+  625   2D03   AD 26 2E                  lda filenr       ;Set filenr
+  626   2D06   8D 49 2D                  sta tmpfile+3
+  627                           
+  628   2D09   A2 FF                     ldx #$ff
+  629   2D0B                    prt_name:
+  630   2D0B   E8                        inx
+  631   2D0C   BD 46 2D                  lda tmpfile,x
+  632   2D0F   20 F4 FF                  jsr OSWRCH
+  633   2D12   C9 0D                     cmp #$0d
+  634   2D14   D0 F5                     bne prt_name
+  635   2D16   A9 0A                     lda #$0a
+  636   2D18   20 F4 FF                  jsr OSWRCH
+  637                           
+  638                           ;--- Load datafile DATx with tiles, sprites and leveldata -------------
+  639                           
+  640   2D1B                    loadfile:
+  641   2D1B   A9 46                     lda #<tmpfile
+  642   2D1D   85 60                     sta loadadr
+  643   2D1F   A9 2D                     lda #>tmpfile
+  644   2D21   85 61                     sta loadadr+1          
+  645                           
+  646   2D23   A9 00                     lda #<load_adr
+  647   2D25   85 62                     sta loadadr+2
+  648   2D27   A9 5C                     lda #>load_adr
+  649   2D29   85 63                     sta loadadr+3          
+  650                           
+  651   2D2B   A9 B2                     lda #$b2
+  652   2D2D   85 64                     sta loadadr+4
+  653   2D2F   A9 C2                     lda #$c2
+  654   2D31   85 65                     sta loadadr+5
+  655                           
+  656   2D33   A2 60                     ldx #loadadr
+  657   2D35   20 E0 FF                  jsr LOADVEC
+  658                           
+  659   2D38   20 81 FB                  jsr WAIT_HSEC    ; Wait 0,5 sec
+  660                           
+  661   2D3B   20 06 2F                  jsr decomp
+  662                           
+  663   2D3E   A9 F0                     lda #$F0         ; Clear4
+  664   2D40   8D 00 B0                  sta MODESEL
+  665                           
+  666   2D43   4C EB 2C                  jmp lf6
+  667   2D46                    tmpfile:
+  668   2D46   44 41 54 78 0D           .db 'DATx',$0D
+  669                           
+  670                           ;========================================================================
+  671                           ;S-KEY, SAVE JET SET MINER DATA FILE
+  672                           ;========================================================================
+  673                           
+  674   2D4B                    save_file:
+  675   2D4B   20 F7 2D                 jsr show_menu
+  676   2D4E   20 76 39                 jsr PUTSTRING
+  677   2D51   0E 08 53 41 56           .db 14,8,'SAVE',0
+        2D56   45 00 
+  678   2D58   EA                       nop
+  679   2D59                    sf0:
+  680   2D59   20 71 FE                 jsr GETKEY
+  681   2D5C   C0 1B                    cpy #UP           ;Up
+  682   2D5E   D0 13                      bne sf2
+  683   2D60   EE 26 2E                   inc filenr
+  684   2D63   AD 26 2E                   lda filenr
+  685   2D66   C9 3A                      cmp #$3a
+  686   2D68   D0 03                      bne sf1
+  687   2D6A   CE 26 2E                   dec filenr
+  688   2D6D                    sf1:
+  689   2D6D   20 1C 2E                   jsr show_file
+  690   2D70   4C 59 2D                   jmp sf0
+  691   2D73                    sf2:
+  692   2D73   C0 1E                    cpy #DOWN         ;Down
+  693   2D75   D0 10                      bne sf4
+  694   2D77   CE 26 2E                   dec filenr
+  695   2D7A   AD 26 2E                   lda filenr
+  696   2D7D   C9 2F                      cmp #$2f
+  697   2D7F   D0 03                      bne sf3
+  698   2D81   EE 26 2E                   inc filenr
+  699   2D84                    sf3:
+  700   2D84   4C 6D 2D                   jmp sf1
+  701   2D87                    sf4:
+  702   2D87   C0 3B                    cpy #ESC          ;Escape
+  703   2D89   D0 03                      bne sf5
+  704   2D8B                    sf6:
+  705   2D8B   4C 9F 2C                   jmp upd_scr
+  706   2D8E                    sf5:
+  707   2D8E   C0 00                    cpy #ACTION       ;Space
+  708   2D90   D0 C7                      bne sf0
+  709                           
+  710   2D92   20 42 2E                   jsr compress
+  711                           
+  712                           ;--- Save file --------------------------------------------------------
+  713                           
+  714   2D95   A9 0C                     lda #12
+  715   2D97   20 F4 FF                  jsr OSWRCH
+  716   2D9A   20 D1 F7                  jsr OSTEXT
+  717   2D9D   53 41 56 49 4E            .db 'SAVING '
+        2DA2   47 20 
+  718   2DA4   EA                        nop
+  719                           
+  720   2DA5   AD 26 2E                  lda filenr       ;Set filenr
+  721   2DA8   8D 49 2D                  sta tmpfile+3
+  722                           
+  723   2DAB   A2 FF                     ldx #$ff
+  724   2DAD                    prt_name1:
+  725   2DAD   E8                        inx
+  726   2DAE   BD 46 2D                  lda tmpfile,x
+  727   2DB1   20 F4 FF                  jsr OSWRCH
+  728   2DB4   C9 0D                     cmp #$0d
+  729   2DB6   D0 F5                     bne prt_name1
+  730   2DB8   A9 0A                     lda #$0a
+  731   2DBA   20 F4 FF                  jsr OSWRCH
+  732                           
+  733                           ;--- Save datafile DATx with tiles, sprites and leveldata -------------
+  734                           
+  735   2DBD                    savefile:
+  736   2DBD   A9 46                     lda #<tmpfile   ; String
+  737   2DBF   85 60                     sta loadadr
+  738   2DC1   A9 2D                     lda #>tmpfile
+  739   2DC3   85 61                     sta loadadr+1          
+  740                           
+  741   2DC5   A9 00                     lda #<load_adr  ; Startaddress
+  742   2DC7   85 62                     sta loadadr+2
+  743   2DC9   A9 5C                     lda #>load_adr
+  744   2DCB   85 63                     sta loadadr+3          
+  745                           
+  746   2DCD   A9 4E                     lda #<jsm_data  ; Exec address
+  747   2DCF   85 64                     sta loadadr+4
+  748   2DD1   A9 3A                     lda #>jsm_data
+  749   2DD3   85 65                     sta loadadr+5
+  750                           
+  751   2DD5   A9 00                     lda #<load_adr  ; Start address
+  752   2DD7   85 66                     sta loadadr+6
+  753   2DD9   A9 5C                     lda #>load_adr
+  754   2DDB   85 67                     sta loadadr+7          
+  755                           
+  756   2DDD   AD 6A 00                  lda wr_ptr      ; Endaddresss
+  757   2DE0   85 68                     sta loadadr+8
+  758   2DE2   AD 6B 00                  lda wr_ptr+1
+  759   2DE5   85 69                     sta loadadr+9
+  760                           
+  761   2DE7   A2 60                     ldx #loadadr
+  762   2DE9   20 DD FF                  jsr SAVEVEC
+  763                           
+  764   2DEC   20 81 FB                  jsr WAIT_HSEC    ; Wait 0,5 sec
+  765                           
+  766   2DEF   A9 F0                     lda #$F0         ; Clear4
+  767   2DF1   8D 00 B0                  sta MODESEL
+  768                           
+  769   2DF4   4C 8B 2D                  jmp sf6       jmp sf6
+  770                           
+  771                           ;--- Draw file menu ---------------------------------------------------
+  772                           
+  773   2DF7                    show_menu:
+  774   2DF7   20 76 39                 jsr PUTSTRING
+  775   2DFA   0C 07 05 03 03           .db 12, 7,5,3,3,3,3,3,3,6,0
+        2DFF   03 03 03 03 06 
+        2E04   00 
+  776   2E05   0C 08 08 20 20           .db 12, 8,8,'      ',8,0
+        2E0A   20 20 20 20 08 
+        2E0F   00 
+  777   2E10   0C 09 01 03 03           .db 12, 9,1,3,3,3,3,3,3,2,0
+        2E15   03 03 03 03 02 
+        2E1A   00 
+  778   2E1B   EA                       nop
+  779   2E1C                    show_file:
+  780   2E1C   20 76 39                 jsr PUTSTRING
+  781   2E1F   0C 0A 08 20 44           .db 12,10,8,' DAT'
+        2E24   41 54 
+  782   2E26                    filenr:
+  783   2E26   30 0D 08 00              .db     '0',13,8,0
+  784   2E2A   EA                       nop
+  785   2E2B   20 76 39                 jsr PUTSTRING
+  786   2E2E   0C 0B 07 03 03           .db 12,11,7,3,3,3,3,3,3,4,0
+        2E33   03 03 03 03 04 
+        2E38   00 
+  787   2E39   EA                       nop
+  788                           
+  789                           ;        lda filenr
+  790                           ;        ldx #10
+  791                           ;        ldy #23
+  792                           ;        jsr PUTCHAR
+  793                           
+  794   2E3A                    wait_rel2:
+  795   2E3A   20 71 FE                 jsr GETKEY
+  796   2E3D   C0 FF                    cpy #$ff
+  797   2E3F   D0 F9                    bne wait_rel2
+  798   2E41   60                       rts    
+  799                           
+  800                           ;--- Compress levels -------------------------------------------------
+  801                           
+  802          0020             max_col    equ 32
+  803          0014             max_row    equ 20
+  804                           
+  805          0063             rd_ptr     equ tmp+3
+  806          0065             counter    equ tmp+5
+  807          0066             curblock   equ tmp+6
+  808          0067             xptr       equ tmp+7
+  809          0068             yptr       equ tmp+8
+  810          0069             tmpsave    equ tmp+9
+  811          006A             wr_ptr     equ tmp+10
+  812                           
+  813   2E42                    compress:
+  814   2E42   A9 88                lda #<level_dat   ; wr_ptr = address to write compressed data to
+  815   2E44   85 6A                sta wr_ptr
+  816   2E46   A9 5C                lda #>level_dat
+  817   2E48   85 6B                sta wr_ptr+1
+  818                           
+  819   2E4A   A9 00                lda #0
+  820   2E4C   85 88                sta LEVEL         ; Reset level counter
+  821   2E4E                    cp1:
+  822   2E4E   A9 00                lda #<data_adr    ; rd_ptr = address to read uncompressed data from
+  823   2E50   85 63                sta rd_ptr
+  824   2E52   A9 50                lda #>data_adr
+  825   2E54   18                   clc
+  826   2E55   65 88                adc LEVEL
+  827   2E57   65 88                adc LEVEL
+  828   2E59   65 88                adc LEVEL
+  829   2E5B   85 64                sta rd_ptr+1
+  830                           
+  831   2E5D   A5 88                lda LEVEL         ; Set startadres level
+  832   2E5F   0A                   asl a
+  833   2E60   0A                   asl a
+  834   2E61   AA                   tax
+  835   2E62   38                   sec
+  836   2E63   A5 6A                lda wr_ptr
+  837   2E65   E9 B2                sbc #<(load_adr-jsm_data) ;Loadaddress JSM is $3806
+  838   2E67   9D 00 5C             sta load_adr,x
+  839   2E6A   A5 6B                lda wr_ptr+1
+  840   2E6C   E9 21                sbc #>(load_adr-jsm_data)
+  841   2E6E   9D 01 5C             sta load_adr+1,x
+  842                           
+  843   2E71   A4 88                ldy LEVEL         ; Header address
+  844   2E73   38                   sec
+  845   2E74   B9 98 2A             lda hdr_ptr_lb,y
+  846   2E77   E9 B2                sbc #<(load_adr-jsm_data)
+  847   2E79   9D 02 5C             sta load_adr+2,x
+  848   2E7C   B9 9C 2A             lda hdr_ptr_hb,y
+  849   2E7F   E9 21                sbc #>(load_adr-jsm_data)
+  850   2E81   9D 03 5C             sta load_adr+3,x
+  851                           
+  852   2E84   A9 00                lda #0
+  853   2E86   85 65                sta counter       ; counter = tilecounter
+  854   2E88   85 67                sta xptr          ; xptr = columncounter
+  855   2E8A   85 68                sta yptr          ; yptr = rowcounter
+  856                           
+  857   2E8C   AA                   tax               ; Get first blocknr
+  858   2E8D   A8                   tay
+  859   2E8E   20 14 34             jsr getblock
+  860   2E91   85 66                sta curblock
+  861                           
+  862   2E93                    cp_loop:
+  863   2E93   A6 67                ldx xptr          ; Check end of column
+  864   2E95   E0 20                cpx #max_col
+  865   2E97   D0 06                bne no_endcol
+  866                           
+  867   2E99   A2 00                ldx #0            ; End of column reached
+  868   2E9B   86 67                stx xptr          ; Reset column counter
+  869   2E9D   E6 68                inc yptr          ; Increment rowcounter
+  870   2E9F                    no_endcol:
+  871   2E9F   A4 68                ldy yptr          ; Check end of rows
+  872   2EA1   C0 14                cpy #max_row
+  873   2EA3   F0 23                beq endrow
+  874                           
+  875   2EA5   20 14 34             jsr getblock      ; Get blocknr. at X,Y
+  876   2EA8   C5 66                cmp curblock      ; Compare with last read block
+  877   2EAA   F0 06                beq inc_cnt
+  878   2EAC   20 E8 2E             jsr exit1         ; Different blocks, so write byte
+  879   2EAF   4C BD 2E             jmp inc_ptr
+  880   2EB2                    inc_cnt:
+  881   2EB2   E6 65                inc counter       ; Same block, increment blockcounter
+  882   2EB4   A5 65                lda counter
+  883   2EB6   C9 3F                cmp #63           ; Check blockcounter=63 (max=1111 11..)
+  884   2EB8   D0 03                bne inc_ptr
+  885   2EBA   20 E8 2E             jsr exit1         ; If reached, write byte
+  886   2EBD                    inc_ptr:
+  887   2EBD   E6 63                inc rd_ptr        ; Increment read pointer
+  888   2EBF   D0 02                bne no_incrd
+  889   2EC1   E6 64                inc rd_ptr+1
+  890   2EC3                    no_incrd:     
+  891   2EC3   E6 67                inc xptr          ; Next column
+  892                           
+  893   2EC5   4C 93 2E             jmp cp_loop       ; Loop
+  894   2EC8                    endrow:
+  895   2EC8   A5 65                lda counter       ; Last byte read, check to write last byte
+  896   2ECA   F0 0C                beq ending
+  897   2ECC   A5 66                lda curblock
+  898   2ECE   20 E8 2E             jsr exit1         ; Write last byte
+  899   2ED1   A9 FF                lda #$ff
+  900   2ED3   91 6A                sta (wr_ptr),y
+  901   2ED5   20 F7 2E             jsr ptr_inc_wr
+  902   2ED8                    ending:
+  903   2ED8   E6 88                inc LEVEL         ; Next level
+  904   2EDA   A5 88                lda LEVEL
+  905   2EDC   C9 04                cmp #4            ; All levels done?
+  906   2EDE   F0 03                beq cp_end
+  907   2EE0   4C 4E 2E             jmp cp1
+  908   2EE3                    cp_end:
+  909   2EE3   29 03                and #3
+  910   2EE5   85 88                sta LEVEL
+  911   2EE7   60                   rts               ; End of routine
+  912                           
+  913   2EE8                    exit1:
+  914   2EE8   29 03                and #3            ; Blocknr & 3
+  915   2EEA   85 69                sta tmpsave       ; Save 
+  916   2EEC   A5 65                lda counter       ; Shift counter 2 bits to the right
+  917   2EEE   0A                   asl a
+  918   2EEF   0A                   asl a
+  919   2EF0   18                   clc               ; Add blocknr
+  920   2EF1   65 66                adc curblock
+  921   2EF3   A0 00                ldy #0
+  922   2EF5   91 6A                sta (wr_ptr),y    ; Write compressed byte
+  923   2EF7                    ptr_inc_wr:
+  924   2EF7   E6 6A                inc wr_ptr        ; Increment write pointer
+  925   2EF9   D0 02                bne no_incwr
+  926   2EFB   E6 6B                inc wr_ptr+1
+  927   2EFD                    no_incwr:
+  928                           
+  929   2EFD   84 65                sty counter       ; Reset blockcounter
+  930   2EFF   E6 65                inc counter       ; 1 block present
+  931   2F01   A5 69                lda tmpsave
+  932   2F03   85 66                sta curblock
+  933   2F05                        
+  934   2F05   60                   rts               ; Back to program
+  935                           
+  936                           ;========================================================================
+  937                           ;SUBROUTINES
+  938                           ;========================================================================
+  939                           
+  940                           ;--- Level decompression ----------------------------------------------
+  941                           
+  942          0060             u_lev     equ tmp         ;Uncompressed data for level
+  943          0062             c_lev     equ tmp+2       ;Compressed data for level
+  944          0064             tmp_dat   equ tmp+4
+  945                           
+  946   2F06                    decomp:
+  947   2F06   A9 00                    lda #0
+  948   2F08   85 88                    sta LEVEL
+  949                           
+  950   2F0A   A9 88                    lda #<level_dat   ;Compressed data address
+  951   2F0C   85 62                    sta c_lev   
+  952   2F0E   A9 5C                    lda #>level_dat
+  953   2F10   85 63                    sta c_lev+1
+  954   2F12                    dloop:
+  955   2F12   A9 00                    lda #<data_adr    ;Uncompressed data store address
+  956   2F14   85 60                    sta u_lev
+  957   2F16   A9 50                    lda #>data_adr
+  958   2F18   18                       clc
+  959   2F19   65 88                    adc LEVEL
+  960   2F1B   65 88                    adc LEVEL
+  961   2F1D   65 88                    adc LEVEL
+  962   2F1F   85 61                    sta u_lev+1
+  963                           
+  964   2F21   A0 00                    ldy #0
+  965   2F23                    deloop:
+  966   2F23   B1 62                    lda (c_lev),y     ;Get next byte
+  967   2F25   C9 FF                    cmp #$ff          ;If $FF then end of level data
+  968   2F27   F0 1E                    beq deend
+  969   2F29   85 64                    sta tmp_dat       ;Save
+  970   2F2B   4A                       lsr a
+  971   2F2C   4A                       lsr a
+  972   2F2D   AA                       tax               ;Get run length number (top 6 bits)
+  973   2F2E   A5 64                    lda tmp_dat
+  974   2F30   29 03                    and #3            ;Get tile number
+  975   2F32                            
+  976   2F32   E6 62                    inc c_lev         ;Increase source address
+  977   2F34   D0 02                    bne nodinc2
+  978   2F36   E6 63                    inc c_lev+1
+  979   2F38                    nodinc2:
+  980   2F38   EA                       nop
+  981   2F39                    dewloop:
+  982   2F39   91 60                    sta (u_lev),y     ;Store tile
+  983   2F3B   E6 60                    inc u_lev         ;Increase dest address
+  984   2F3D   D0 02                    bne nodeinc
+  985   2F3F   E6 61                    inc u_lev+1
+  986   2F41                    nodeinc:
+  987   2F41   CA                       dex               ;Decrease run length count
+  988   2F42   D0 F5                    bne dewloop       ;and loop
+  989   2F44   4C 23 2F                 jmp deloop        ;Byte over - jump to start of loop
+  990                           
+  991   2F47                    deend:
+  992   2F47   E6 62                    inc c_lev         ;Increase source address
+  993   2F49   D0 02                    bne nodinc3
+  994   2F4B   E6 63                    inc c_lev+1
+  995   2F4D                    nodinc3:
+  996   2F4D   E6 88                    inc LEVEL
+  997   2F4F   A5 88                    lda LEVEL
+  998   2F51   C9 04                    cmp #4
+  999   2F53   D0 BD                    bne dloop
+ 1000   2F55   29 03                    and #3
+ 1001   2F57   85 88                    sta LEVEL
+ 1002   2F59   60                       rts
+ 1003                           
+ 1004                           ;---------------------------------------------------------------
+ 1005                           ;Draw sprite a,x,y
+ 1006                           ;---------------------------------------------------------------
+ 1007                           
+ 1008          0065             spriteadr   equ tmp+5
+ 1009          0067             screenadr   equ tmp+7
+ 1010          0069             tmpnr       equ tmp+9
+ 1011          006A             tmpx        equ tmp+10
+ 1012          006B             tmpy        equ tmp+11
+ 1013                           
+ 1014   2F5A                    drawsprite:
+ 1015   2F5A   85 69                    sta tmpnr
+ 1016   2F5C   8A                       txa
+ 1017   2F5D   4A                       lsr a
+ 1018   2F5E   4A                       lsr a
+ 1019   2F5F   4A                       lsr a
+ 1020   2F60   85 6A                    sta tmpx
+ 1021   2F62   98                       tya
+ 1022   2F63   4A                       lsr a
+ 1023   2F64   4A                       lsr a
+ 1024   2F65   4A                       lsr a
+ 1025   2F66   85 6B                    sta tmpy
+ 1026                           
+ 1027   2F68   A9 0C                    lda #12
+ 1028   2F6A   A6 6A                    ldx tmpx
+ 1029   2F6C   A4 6B                    ldy tmpy
+ 1030   2F6E   20 A7 39                 jsr PUTCHAR
+ 1031                           
+ 1032   2F71   A9 0C                    lda #12
+ 1033   2F73   A6 6A                    ldx tmpx
+ 1034   2F75   E8                       inx
+ 1035   2F76   A4 6B                    ldy tmpy
+ 1036   2F78   20 A7 39                 jsr PUTCHAR
+ 1037   2F7B                     
+ 1038   2F7B   A6 6A                    ldx tmpx
+ 1039   2F7D   A4 6B                    ldy tmpy
+ 1040   2F7F   C8                       iny
+ 1041   2F80   A5 69                    lda tmpnr
+ 1042   2F82   F0 05                    beq spr_left
+ 1043   2F84   A9 0A                    lda #10
+ 1044   2F86   4C 94 2F                 jmp put_spr
+ 1045   2F89                    spr_left: 
+ 1046   2F89   38                       sec               ;$0e,$13,$18,$1d (14,19,24,29)
+ 1047   2F8A   AD 64 00                 lda dat_tmp
+ 1048   2F8D   E9 0E                    sbc #14
+ 1049   2F8F   29 03                    and #3
+ 1050   2F91   18                       clc
+ 1051   2F92   69 0E                    adc #14
+ 1052   2F94                    put_spr:
+ 1053   2F94   20 A7 39                 jsr PUTCHAR
+ 1054                           
+ 1055   2F97   A6 6A                    ldx tmpx
+ 1056   2F99   E8                       inx
+ 1057   2F9A   A4 6B                    ldy tmpy
+ 1058   2F9C   C8                       iny
+ 1059   2F9D   A5 69                    lda tmpnr
+ 1060   2F9F   F0 0E                    beq spr_left2
+ 1061   2FA1   38                       sec
+ 1062   2FA2   AD 64 00                 lda dat_tmp
+ 1063   2FA5   E9 0E                    sbc #14
+ 1064   2FA7   29 03                    and #3
+ 1065   2FA9   18                       clc
+ 1066   2FAA   69 0E                    adc #14
+ 1067   2FAC   4C B1 2F                 jmp put_spr2
+ 1068   2FAF                    spr_left2: 
+ 1069   2FAF   A9 09                    lda #9
+ 1070   2FB1                    put_spr2:
+ 1071   2FB1   20 A7 39                 jsr PUTCHAR
+ 1072                           
+ 1073   2FB4   60                       rts
+ 1074                           
+ 1075                           ;---------------------------------------------------------------
+ 1076                           ;Make status display (why did I call it 'display bottom'?)
+ 1077                           ;---------------------------------------------------------------
+ 1078                           
+ 1079   2FB5                    mkdispb:
+ 1080   2FB5   20 76 39                 jsr PUTSTRING
+ 1081   2FB8   00 14 20 20 20           .db 0,20,'     X   Y _ TILES _ GAME  _ENEM',0
+        2FBD   20 20 58 20 20 
+        2FC2   20 59 20 5F 20 
+        2FC7   54 49 4C 45 53 
+        2FCC   20 5F 20 47 41 
+        2FD1   4D 45 20 20 5F 
+        2FD6   45 4E 45 4D 00 
+ 1082   2FDB   00 15 50 49 58           .db 0,21,'PIX 000,000_1 2 3 4_K D LEV_LOAD',0 
+        2FE0   20 30 30 30 2C 
+        2FE5   30 30 30 5F 31 
+        2FEA   20 32 20 33 20 
+        2FEF   34 5F 4B 20 44 
+        2FF4   20 4C 45 56 5F 
+        2FF9   4C 4F 41 44 00 
+ 1083   2FFE   00 16 42 59 54           .db 0,22,'BYT 000,000_       _0    0 _SAVE',0
+        3003   20 30 30 30 2C 
+        3008   30 30 30 5F 20 
+        300D   20 20 20 20 20 
+        3012   20 5F 30 20 20 
+        3017   20 20 30 20 5F 
+        301C   53 41 56 45 00 
+ 1084   3021   00 17 46 49 4C           .db 0,23,'FILE : DAT0_^      _       _QUIT',0
+        3026   45 20 3A 20 44 
+        302B   41 54 30 5F 5E 
+        3030   20 20 20 20 20 
+        3035   20 5F 20 20 20 
+        303A   20 20 20 20 5F 
+        303F   51 55 49 54 00 
+ 1085   3044   EA                       nop
+ 1086                           
+ 1087   3045   A9 00                    lda #0           ;Set tile0
+ 1088   3047   A2 0C                    ldx #12
+ 1089   3049   A0 16                    ldy #22
+ 1090   304B   20 52 34                 jsr drawtile
+ 1091                           
+ 1092   304E   A9 01                    lda #1           ;Set tile1
+ 1093   3050   A2 0E                    ldx #14 
+ 1094   3052   A0 16                    ldy #22
+ 1095   3054   20 52 34                 jsr drawtile
+ 1096                           
+ 1097   3057   A9 02                    lda #2           ;Set tile2
+ 1098   3059   A2 10                    ldx #16
+ 1099   305B   A0 16                    ldy #22
+ 1100   305D   20 52 34                 jsr drawtile
+ 1101                           
+ 1102   3060   A9 03                    lda #3           ;Set tile3
+ 1103   3062   A2 12                    ldx #18
+ 1104   3064   A0 16                    ldy #22
+ 1105   3066   20 52 34                 jsr drawtile
+ 1106                           
+ 1107   3069   A5 84                    lda CNT_KEY      ;Set key nr
+ 1108   306B   18                       clc
+ 1109   306C   69 30                    adc #$30
+ 1110   306E   A2 14                    ldx #20
+ 1111   3070   A0 16                    ldy #22
+ 1112   3072   20 A7 39                 jsr PUTCHAR
+ 1113                           
+ 1114   3075   A5 88                    lda LEVEL        ;Set level nr
+ 1115   3077   18                       clc
+ 1116   3078   69 30                    adc #$30
+ 1117   307A   A2 19                    ldx #25
+ 1118   307C   A0 16                    ldy #22
+ 1119   307E   20 A7 39                 jsr PUTCHAR
+ 1120                           
+ 1121   3081   AD 26 2E                 lda filenr
+ 1122   3084   A2 0A                    ldx #10
+ 1123   3086   A0 17                    ldy #23
+ 1124   3088   20 A7 39                 jsr PUTCHAR
+ 1125                           
+ 1126   308B   20 74 2C                 jsr tile_upd
+ 1127   308E   60                       rts
+ 1128                           
+ 1129                           ;---------------------------------------------------------------
+ 1130                           ;Show status display properties enemies
+ 1131                           ;---------------------------------------------------------------
+ 1132                           
+ 1133          0060             ene_counter    equ tmp
+ 1134          0061             ene_line       equ tmp+1
+ 1135          0062             ene_cursor     equ tmp+2
+ 1136                           
+ 1137   308F                    ene_prop:
+ 1138   308F   A9 00                    lda #0
+ 1139   3091   85 62                    sta ene_cursor
+ 1140                           
+ 1141   3093                    prop_start:
+ 1142   3093   20 C1 31                 jsr prop_val
+ 1143   3096                    prop_redraw:
+ 1144   3096   20 3A 2E                 jsr wait_rel2
+ 1145   3099   20 2D 33                 jsr show_cursor
+ 1146   309C                    prop_scan:
+ 1147   309C   20 71 FE                 jsr GETKEY
+ 1148   309F                    prop_key1:
+ 1149   309F   C0 1B                    cpy #UP           ;Cursor up
+ 1150   30A1   D0 09                      bne prop_key2
+ 1151   30A3   A5 62                      lda ene_cursor
+ 1152   30A5   F0 F5                      beq prop_scan
+ 1153   30A7   C6 62                      dec ene_cursor
+ 1154   30A9   4C 96 30                   jmp prop_redraw
+ 1155   30AC                    prop_key2:
+ 1156   30AC   C0 1E                    cpy #DOWN         ;Cursor down
+ 1157   30AE   D0 0B                      bne prop_key3
+ 1158   30B0   A5 62                      lda ene_cursor
+ 1159   30B2   C9 03                      cmp #3
+ 1160   30B4   F0 E6                      beq prop_scan
+ 1161   30B6   E6 62                      inc ene_cursor
+ 1162   30B8   4C 96 30                   jmp prop_redraw
+ 1163   30BB                    prop_key3:
+ 1164   30BB   C0 24                    cpy #DOOR         ;Direction
+ 1165   30BD   D0 34                      bne prop_key4
+ 1166   30BF   A5 62                      lda ene_cursor
+ 1167   30C1   0A                         asl a
+ 1168   30C2   0A                         asl a
+ 1169   30C3   18                         clc
+ 1170   30C4   65 62                      adc ene_cursor
+ 1171   30C6   69 0E                      adc #14
+ 1172   30C8   A8                         tay
+ 1173   30C9   B1 8C                      lda (LEV_HEAD),y
+ 1174   30CB   D0 08                      bne prop2
+ 1175   30CD   18                         clc
+ 1176   30CE   69 01                      adc #1
+ 1177   30D0   91 8C                      sta (LEV_HEAD),y
+ 1178   30D2   4C E4 30                   jmp p_end 
+ 1179   30D5                    prop2:
+ 1180   30D5   C9 01                      cmp #1
+ 1181   30D7   D0 07                      bne prop3
+ 1182   30D9   A9 FF                      lda #255
+ 1183   30DB   91 8C                      sta (LEV_HEAD),y
+ 1184   30DD   4C E4 30                   jmp p_end
+ 1185   30E0                    prop3:
+ 1186   30E0   A9 00                      lda #0
+ 1187   30E2   91 8C                      sta (LEV_HEAD),y
+ 1188   30E4                    p_end:
+ 1189   30E4   48                         pha
+ 1190   30E5   A2 18                      ldx #24
+ 1191   30E7   A5 62                      lda ene_cursor
+ 1192   30E9   09 08                      ora #8
+ 1193   30EB   A8                         tay
+ 1194   30EC   68                         pla
+ 1195   30ED   20 81 34                   jsr hex2dec
+ 1196   30F0   4C 96 30                   jmp prop_redraw
+ 1197   30F3                    prop_key4:
+ 1198   30F3   C0 2C                    cpy #L_KEY         ;Left border
+ 1199   30F5   D0 2D                      bne prop_key5
+ 1200   30F7   A5 62                      lda ene_cursor
+ 1201   30F9   0A                         asl a
+ 1202   30FA   0A                         asl a
+ 1203   30FB   18                         clc
+ 1204   30FC   65 62                      adc ene_cursor
+ 1205   30FE   69 0C                      adc #12
+ 1206   3100   A8                         tay
+ 1207   3101   B1 8C                      lda (LEV_HEAD),y
+ 1208   3103   2C 01 B0                   bit SHIFTKEY
+ 1209   3106   30 06                      bmi prop4
+ 1210   3108   38                         sec
+ 1211   3109   E9 02                      sbc #2
+ 1212   310B   4C 11 31                   jmp prop5
+ 1213   310E                    prop4:
+ 1214   310E   18                         clc
+ 1215   310F   69 02                      adc #2
+ 1216   3111                    prop5:
+ 1217   3111   29 FE                      and #$fe
+ 1218   3113   91 8C                      sta (LEV_HEAD),y
+ 1219   3115   48                         pha
+ 1220   3116   A2 10                      ldx #16
+ 1221   3118   A5 62                      lda ene_cursor
+ 1222   311A   09 08                      ora #8
+ 1223   311C   A8                         tay
+ 1224   311D   68                         pla
+ 1225   311E   20 81 34                   jsr hex2dec
+ 1226   3121   4C 96 30                   jmp prop_redraw
+ 1227   3124                    prop_key5:
+ 1228   3124   C0 32                    cpy #R_KEY         ;Right border
+ 1229   3126   D0 2D                      bne prop_key6
+ 1230   3128   A5 62                      lda ene_cursor
+ 1231   312A   0A                         asl a
+ 1232   312B   0A                         asl a
+ 1233   312C   18                         clc
+ 1234   312D   65 62                      adc ene_cursor
+ 1235   312F   69 0D                      adc #13
+ 1236   3131   A8                         tay
+ 1237   3132   B1 8C                      lda (LEV_HEAD),y
+ 1238   3134   2C 01 B0                   bit SHIFTKEY
+ 1239   3137   30 06                      bmi prop6
+ 1240   3139   38                         sec
+ 1241   313A   E9 02                      sbc #2
+ 1242   313C   4C 42 31                   jmp prop7
+ 1243   313F                    prop6:
+ 1244   313F   18                         clc
+ 1245   3140   69 02                      adc #2
+ 1246   3142                    prop7:
+ 1247   3142   29 FE                      and #$fe
+ 1248   3144   91 8C                      sta (LEV_HEAD),y
+ 1249   3146   48                         pha
+ 1250   3147   A2 14                      ldx #20
+ 1251   3149   A5 62                      lda ene_cursor
+ 1252   314B   09 08                      ora #8
+ 1253   314D   A8                         tay
+ 1254   314E   68                         pla
+ 1255   314F   20 81 34                   jsr hex2dec
+ 1256   3152   4C 96 30                   jmp prop_redraw
+ 1257   3155                    prop_key6:
+ 1258   3155   C0 38                    cpy #X_KEY         ;X-coord
+ 1259   3157   D0 2B                      bne prop_key7
+ 1260   3159   A5 62                      lda ene_cursor
+ 1261   315B   0A                         asl a
+ 1262   315C   0A                         asl a
+ 1263   315D   18                         clc
+ 1264   315E   65 62                      adc ene_cursor
+ 1265   3160   69 0A                      adc #10
+ 1266   3162   A8                         tay
+ 1267   3163   B1 8C                      lda (LEV_HEAD),y
+ 1268   3165   2C 01 B0                   bit SHIFTKEY
+ 1269   3168   30 06                      bmi prop8
+ 1270   316A   38                         sec
+ 1271   316B   E9 02                      sbc #2
+ 1272   316D   4C 73 31                   jmp prop9
+ 1273   3170                    prop8:
+ 1274   3170   18                         clc
+ 1275   3171   69 02                      adc #2
+ 1276   3173                    prop9:
+ 1277   3173   91 8C                      sta (LEV_HEAD),y
+ 1278   3175   48                         pha
+ 1279   3176   A2 08                      ldx #8
+ 1280   3178   A5 62                      lda ene_cursor
+ 1281   317A   09 08                      ora #8
+ 1282   317C   A8                         tay
+ 1283   317D   68                         pla
+ 1284   317E   20 81 34                   jsr hex2dec
+ 1285   3181   4C 96 30                   jmp prop_redraw
+ 1286   3184                    prop_key7:
+ 1287   3184   C0 39                    cpy #Y_KEY         ;Y-coord
+ 1288   3186   D0 2B                      bne prop_key8
+ 1289   3188   A5 62                      lda ene_cursor
+ 1290   318A   0A                         asl a
+ 1291   318B   0A                         asl a
+ 1292   318C   18                         clc
+ 1293   318D   65 62                      adc ene_cursor
+ 1294   318F   69 0B                      adc #11
+ 1295   3191   A8                         tay
+ 1296   3192   B1 8C                      lda (LEV_HEAD),y
+ 1297   3194   2C 01 B0                   bit SHIFTKEY
+ 1298   3197   30 06                      bmi prop10
+ 1299   3199   38                         sec
+ 1300   319A   E9 02                      sbc #2
+ 1301   319C   4C A2 31                   jmp prop11
+ 1302   319F                    prop10:
+ 1303   319F   18                         clc
+ 1304   31A0   69 02                      adc #2
+ 1305   31A2                    prop11:
+ 1306   31A2   91 8C                      sta (LEV_HEAD),y
+ 1307   31A4   48                         pha
+ 1308   31A5   A2 0C                      ldx #12
+ 1309   31A7   A5 62                      lda ene_cursor
+ 1310   31A9   09 08                      ora #8
+ 1311   31AB   A8                         tay
+ 1312   31AC   68                         pla
+ 1313   31AD   20 81 34                   jsr hex2dec
+ 1314   31B0   4C 96 30                   jmp prop_redraw
+ 1315   31B3                    prop_key8:
+ 1316   31B3   C0 3B                    cpy #ESC
+ 1317   31B5   F0 03                     beq prop_end
+ 1318   31B7   4C 9C 30                  jmp prop_scan
+ 1319   31BA                    prop_end:
+ 1320   31BA   20 D5 34                 jsr set_raster
+ 1321   31BD   20 5E 33                 jsr drawlev
+ 1322   31C0   60                       rts
+ 1323                           
+ 1324   31C1                    prop_val:
+ 1325   31C1   20 76 39                 jsr PUTSTRING
+ 1326   31C4   03 04 05 03 03           .db 3, 4,5,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,6,0
+        31C9   03 03 03 03 03 
+        31CE   03 03 03 03 03 
+        31D3   03 03 03 03 03 
+        31D8   03 03 03 03 03 
+        31DD   03 03 06 00 
+ 1327   31E1   03 05 5F 20 20           .db 3, 5,'_   ENEMIE PROPERTIES    _',0
+        31E6   20 45 4E 45 4D 
+        31EB   49 45 20 50 52 
+        31F0   4F 50 45 52 54 
+        31F5   49 45 53 20 20 
+        31FA   20 20 5F 00 
+ 1328   31FE   03 06 01 03 03           .db 3, 6,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2,0
+        3203   03 03 03 03 03 
+        3208   03 03 03 03 03 
+        320D   03 03 03 03 03 
+        3212   03 03 03 03 03 
+        3217   03 03 02 00 
+ 1329   321B   03 07 5F 20 4E           .db 3, 7,'_ NR  X   Y  <-L R-> DIR _',0
+        3220   52 20 20 58 20 
+        3225   20 20 59 20 20 
+        322A   3C 2D 4C 20 52 
+        322F   2D 3E 20 44 49 
+        3234   52 20 5F 00 
+ 1330   3238   03 08 5F 20 20           .db 3, 8,'_  0 000 000 000 000 000 _',0
+        323D   30 20 30 30 30 
+        3242   20 30 30 30 20 
+        3247   30 30 30 20 30 
+        324C   30 30 20 30 30 
+        3251   30 20 5F 00 
+ 1331   3255   03 09 5F 20 20           .db 3, 9,'_  1 000 000 000 000 000 _',0
+        325A   31 20 30 30 30 
+        325F   20 30 30 30 20 
+        3264   30 30 30 20 30 
+        3269   30 30 20 30 30 
+        326E   30 20 5F 00 
+ 1332   3272   03 0A 5F 20 20           .db 3,10,'_  2 000 000 000 000 000 _',0
+        3277   32 20 30 30 30 
+        327C   20 30 30 30 20 
+        3281   30 30 30 20 30 
+        3286   30 30 20 30 30 
+        328B   30 20 5F 00 
+ 1333   328F   03 0B 5F 20 20           .db 3,11,'_  3 000 000 000 000 000 _',0
+        3294   33 20 30 30 30 
+        3299   20 30 30 30 20 
+        329E   30 30 30 20 30 
+        32A3   30 30 20 30 30 
+        32A8   30 20 5F 00 
+ 1334   32AC   03 0C 07 03 03           .db 3,12,7,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4,0
+        32B1   03 03 03 03 03 
+        32B6   03 03 03 03 03 
+        32BB   03 03 03 03 03 
+        32C0   03 03 03 03 03 
+        32C5   03 03 04 00 
+ 1335   32C9   EA                       nop
+ 1336                           
+ 1337   32CA   A9 00                    lda #0
+ 1338   32CC   85 60                    sta ene_counter
+ 1339   32CE   A9 08                    lda #8
+ 1340   32D0   85 61                    sta ene_line
+ 1341   32D2   A0 0A                    ldy #10
+ 1342   32D4   8C 64 00                 sty dat_tmp
+ 1343   32D7                    prop_loop:
+ 1344   32D7   AC 64 00                 ldy dat_tmp
+ 1345   32DA   B1 8C                    lda (LEV_HEAD),y
+ 1346   32DC   A2 08                    ldx #8
+ 1347   32DE   A4 61                    ldy tmp+1
+ 1348   32E0   20 81 34                 jsr hex2dec
+ 1349   32E3   EE 64 00                 inc dat_tmp
+ 1350                           
+ 1351   32E6   AC 64 00                 ldy dat_tmp
+ 1352   32E9   B1 8C                    lda (LEV_HEAD),y
+ 1353   32EB   A2 0C                    ldx #12
+ 1354   32ED   A4 61                    ldy tmp+1
+ 1355   32EF   20 81 34                 jsr hex2dec
+ 1356   32F2   EE 64 00                 inc dat_tmp
+ 1357                           
+ 1358   32F5   AC 64 00                 ldy dat_tmp
+ 1359   32F8   B1 8C                    lda (LEV_HEAD),y
+ 1360   32FA   A2 10                    ldx #16
+ 1361   32FC   A4 61                    ldy tmp+1
+ 1362   32FE   20 81 34                 jsr hex2dec
+ 1363   3301   EE 64 00                 inc dat_tmp
+ 1364                           
+ 1365   3304   AC 64 00                 ldy dat_tmp
+ 1366   3307   B1 8C                    lda (LEV_HEAD),y
+ 1367   3309   A2 14                    ldx #20
+ 1368   330B   A4 61                    ldy tmp+1
+ 1369   330D   20 81 34                 jsr hex2dec
+ 1370   3310   EE 64 00                 inc dat_tmp
+ 1371                           
+ 1372   3313   AC 64 00                 ldy dat_tmp
+ 1373   3316   B1 8C                    lda (LEV_HEAD),y
+ 1374   3318   A2 18                    ldx #24
+ 1375   331A   A4 61                    ldy tmp+1
+ 1376   331C   20 81 34                 jsr hex2dec
+ 1377   331F   EE 64 00                 inc dat_tmp
+ 1378                           
+ 1379   3322   E6 61                    inc tmp+1
+ 1380   3324   E6 60                    inc tmp
+ 1381   3326   A5 60                    lda tmp
+ 1382   3328   C9 04                    cmp #4
+ 1383   332A   D0 AB                    bne prop_loop
+ 1384   332C   60                       rts
+ 1385                           
+ 1386   332D                    show_cursor:
+ 1387   332D   A2 04                    ldx #4
+ 1388   332F   A0 08                    ldy #8
+ 1389   3331   A9 20                    lda #' '
+ 1390   3333   20 A7 39                 jsr PUTCHAR
+ 1391   3336   A2 04                    ldx #4
+ 1392   3338   A0 09                    ldy #9
+ 1393   333A   A9 20                    lda #' '
+ 1394   333C   20 A7 39                 jsr PUTCHAR
+ 1395   333F   A2 04                    ldx #4
+ 1396   3341   A0 0A                    ldy #10
+ 1397   3343   A9 20                    lda #' '
+ 1398   3345   20 A7 39                 jsr PUTCHAR
+ 1399   3348   A2 04                    ldx #4
+ 1400   334A   A0 0B                    ldy #11
+ 1401   334C   A9 20                    lda #' '
+ 1402   334E   20 A7 39                 jsr PUTCHAR
+ 1403                           
+ 1404   3351   A2 04                    ldx #4
+ 1405   3353   18                       clc
+ 1406   3354   A5 62                    lda ene_cursor
+ 1407   3356   69 08                    adc #8
+ 1408   3358   A8                       tay
+ 1409   3359   A9 3E                    lda #'>'
+ 1410   335B   4C A7 39                 jmp PUTCHAR
+ 1411                           
+ 1412                           
+ 1413                           ;---------------------------------------------------------------
+ 1414                           ;Draw level background + keys
+ 1415                           ;---------------------------------------------------------------
+ 1416                           
+ 1417          0060             dat_adr    equ tmp     ; TMPVAR+2/3
+ 1418          0062             row_cnt    equ tmp+2   ;Temp row counter      +8
+ 1419          0063             col_cnt    equ tmp+3   ;Temp column counter   +9
+ 1420          0064             dat_tmp    equ tmp+4
+ 1421                           
+ 1422   335E                    drawlev:
+ 1423   335E   A9 00                    lda #<data_adr        ;Get address to store uncompressed data
+ 1424   3360   85 60                    sta dat_adr
+ 1425   3362   A9 50                    lda #>data_adr
+ 1426   3364   18                       clc
+ 1427   3365   65 88                    adc LEVEL
+ 1428   3367   65 88                    adc LEVEL
+ 1429   3369   65 88                    adc LEVEL
+ 1430   336B   85 61                    sta dat_adr+1
+ 1431                           
+ 1432                           ;Draw level without keys
+ 1433   336D   A9 00                    lda #0          ;Row counter
+ 1434   336F   85 62                    sta row_cnt
+ 1435                           
+ 1436   3371                    dr_loop1:
+ 1437   3371   A9 00                    lda #0
+ 1438   3373   85 63                    sta col_cnt     ;Column counter
+ 1439   3375                    dr_loop2:
+ 1440   3375   A0 00                    ldy #0
+ 1441   3377   B1 60                    lda (dat_adr),y
+ 1442   3379   A6 63                    ldx col_cnt
+ 1443   337B   A4 62                    ldy row_cnt
+ 1444   337D   20 52 34                 jsr drawtile
+ 1445                           
+ 1446   3380   E6 60                    inc dat_adr
+ 1447   3382   D0 02                    bne dr_noinc
+ 1448   3384   E6 61                    inc dat_adr+1
+ 1449   3386                    dr_noinc:
+ 1450   3386   E6 63                    inc col_cnt
+ 1451   3388   A5 63                    lda col_cnt
+ 1452   338A   C9 20                    cmp #32
+ 1453   338C   D0 E7                    bne dr_loop2
+ 1454                           
+ 1455   338E   E6 62                    inc row_cnt
+ 1456   3390   A5 62                    lda row_cnt
+ 1457   3392   C9 14                    cmp #20
+ 1458   3394   D0 DB                    bne dr_loop1
+ 1459                           
+ 1460                           ;--- Draw key sprites onto screen -----------------------------
+ 1461                           
+ 1462   3396   A0 00                    ldy #0
+ 1463   3398   84 64                    sty dat_tmp
+ 1464   339A                    keyloop:
+ 1465   339A   A4 64                    ldy dat_tmp
+ 1466   339C   B1 8C                    lda (LEV_HEAD),y  ;x-coord key
+ 1467   339E   AA                       tax
+ 1468   339F   C8                       iny
+ 1469   33A0   B1 8C                    lda (LEV_HEAD),y  ;Y-coord key
+ 1470   33A2   A8                       tay
+ 1471   33A3   A9 04                    lda #4
+ 1472   33A5   20 52 34                 jsr drawtile
+ 1473                           
+ 1474   33A8   E6 64                    inc dat_tmp
+ 1475   33AA   E6 64                    inc dat_tmp
+ 1476   33AC   A5 64                    lda dat_tmp
+ 1477   33AE   C9 08                    cmp #8
+ 1478   33B0   D0 E8                    bne keyloop
+ 1479   33B2                            
+ 1480                           ;--- Draw door onto screen -----------------------------------
+ 1481                           
+ 1482   33B2                    drawdoor:
+ 1483   33B2   A0 08                    ldy #8
+ 1484   33B4   B1 8C                    lda (LEV_HEAD),y
+ 1485   33B6   85 64                    sta dat_tmp
+ 1486   33B8   C8                       iny
+ 1487   33B9   B1 8C                    lda (LEV_HEAD),y
+ 1488   33BB   85 65                    sta dat_tmp+1
+ 1489                           
+ 1490   33BD   A6 64                    ldx dat_tmp
+ 1491   33BF   A4 65                    ldy dat_tmp+1
+ 1492   33C1   A9 05                    lda #5
+ 1493   33C3   20 52 34                 jsr drawtile
+ 1494                           
+ 1495   33C6   E6 64                    inc dat_tmp
+ 1496   33C8   A6 64                    ldx dat_tmp
+ 1497   33CA   A4 65                    ldy dat_tmp+1
+ 1498   33CC   A9 06                    lda #6
+ 1499   33CE   20 52 34                 jsr drawtile
+ 1500                           
+ 1501   33D1   E6 65                    inc dat_tmp+1
+ 1502   33D3   A6 64                    ldx dat_tmp
+ 1503   33D5   A4 65                    ldy dat_tmp+1
+ 1504   33D7   A9 08                    lda #8
+ 1505   33D9   20 52 34                 jsr drawtile
+ 1506                           
+ 1507   33DC   C6 64                    dec dat_tmp
+ 1508   33DE   A6 64                    ldx dat_tmp
+ 1509   33E0   A4 65                    ldy dat_tmp+1
+ 1510   33E2   A9 07                    lda #7
+ 1511   33E4   20 52 34                 jsr drawtile
+ 1512                           
+ 1513                           ;--- Draw enemies onto screen -----------------------------------
+ 1514                           
+ 1515   33E7                    drawene:
+ 1516   33E7   A0 0E                    ldy #14
+ 1517   33E9   84 64                    sty dat_tmp
+ 1518   33EB                    eneloop:
+ 1519   33EB   A4 64                    ldy dat_tmp
+ 1520   33ED   B1 8C                    lda (LEV_HEAD),y
+ 1521   33EF   C9 FF                    cmp #$ff
+ 1522   33F1   F0 10                    beq next_ene
+ 1523   33F3   48                       pha
+ 1524   33F4   88                       dey
+ 1525   33F5   88                       dey
+ 1526   33F6   88                       dey
+ 1527   33F7   88                       dey
+ 1528   33F8   B1 8C                    lda (LEV_HEAD),y  ;x-coord ene
+ 1529   33FA   AA                       tax
+ 1530   33FB   C8                       iny
+ 1531   33FC   B1 8C                    lda (LEV_HEAD),y  ;Y-coord ene
+ 1532   33FE   A8                       tay
+ 1533   33FF   68                       pla
+ 1534   3400   20 5A 2F                 jsr drawsprite
+ 1535   3403                    next_ene:
+ 1536   3403   E6 64                    inc dat_tmp
+ 1537   3405   E6 64                    inc dat_tmp
+ 1538   3407   E6 64                    inc dat_tmp
+ 1539   3409   E6 64                    inc dat_tmp
+ 1540   340B   E6 64                    inc dat_tmp
+ 1541   340D   A5 64                    lda dat_tmp
+ 1542   340F   C9 22                    cmp #34
+ 1543   3411   D0 D8                    bne eneloop
+ 1544                           
+ 1545   3413   60                       rts 
+ 1546                           
+ 1547                           ;--- Get tile nr from uncompressed leveldata ------------------
+ 1548                           
+ 1549          0060             LEVADR    equ tmp
+ 1550          0062             TMPBLOCK  equ tmp+2
+ 1551                           
+ 1552   3414                    getblock:
+ 1553   3414   20 28 34                 jsr calc_adr
+ 1554   3417   A0 00                    ldy #0          ;Read blocknr
+ 1555   3419   B1 60                    lda (LEVADR),y
+ 1556   341B   60                       rts
+ 1557                           
+ 1558                           ;--- Set tile nr into uncompressed data -----------------------
+ 1559                           
+ 1560   341C                    setblock:
+ 1561   341C   85 62                    sta TMPBLOCK
+ 1562   341E   20 28 34                 jsr calc_adr
+ 1563   3421   A5 62                    lda TMPBLOCK
+ 1564   3423   A0 00                    ldy #0          ;Read blocknr
+ 1565   3425   91 60                    sta (LEVADR),y
+ 1566   3427   60                       rts
+ 1567                           
+ 1568   3428                    calc_adr:
+ 1569   3428   84 60                    sty LEVADR
+ 1570   342A   A9 00                    lda #0
+ 1571   342C   85 61                    sta LEVADR+1
+ 1572                           
+ 1573   342E   06 60                    asl LEVADR      ;Calculate Y*32
+ 1574   3430   06 60                    asl LEVADR
+ 1575   3432   06 60                    asl LEVADR
+ 1576   3434   06 60                    asl LEVADR
+ 1577   3436   26 61                    rol LEVADR+1
+ 1578   3438   06 60                    asl LEVADR
+ 1579   343A   26 61                    rol LEVADR+1
+ 1580                           
+ 1581   343C   8A                       txa             ;Add X + baseadres leveldata
+ 1582   343D   18                       clc
+ 1583   343E   65 60                    adc LEVADR
+ 1584   3440   69 00                    adc #<data_adr
+ 1585   3442   85 60                    sta LEVADR
+ 1586   3444   A5 61                    lda LEVADR+1
+ 1587   3446   69 50                    adc #>data_adr
+ 1588   3448   18                       clc
+ 1589   3449   65 88                    adc LEVEL
+ 1590   344B   65 88                    adc LEVEL
+ 1591   344D   65 88                    adc LEVEL
+ 1592   344F   85 61                    sta LEVADR+1
+ 1593                           
+ 1594   3451   60                       rts
+ 1595                           
+ 1596                           ;--- Draw tile a,x,y -------------------------------------------
+ 1597                           
+ 1598          0066             scradr     equ tmp+6
+ 1599          0068             tileadr    equ tmp+8
+ 1600                           
+ 1601   3452                    drawtile:
+ 1602   3452   0A                       asl a
+ 1603   3453   0A                       asl a
+ 1604   3454   0A                       asl a
+ 1605   3455   18                       clc
+ 1606   3456   69 12                    adc #<tiles
+ 1607   3458   85 68                    sta tileadr
+ 1608   345A   A9 3A                    lda #>tiles
+ 1609   345C   69 00                    adc #0
+ 1610   345E   85 69                    sta tileadr+1
+ 1611                           
+ 1612   3460   86 66                    stx scradr
+ 1613   3462   98                       tya
+ 1614   3463   18                       clc
+ 1615   3464   69 80                    adc #>SCRBASE
+ 1616   3466   85 67                    sta scradr+1
+ 1617                           
+ 1618   3468   A2 00                    ldx #0
+ 1619   346A                    t_loop:
+ 1620   346A   A0 00                    ldy #0
+ 1621   346C   B1 68                    lda (tileadr),y
+ 1622   346E   BC 6E 36                 ldy scrptr,x
+ 1623   3471   51 66                    eor (scradr),y
+ 1624   3473   91 66                    sta (scradr),y
+ 1625   3475   E6 68                    inc tileadr
+ 1626   3477   D0 02                    bne no_tileinc
+ 1627   3479   E6 69                    inc tileadr+1
+ 1628   347B                    no_tileinc:
+ 1629   347B   E8                       inx
+ 1630   347C   E0 08                    cpx #8
+ 1631   347E   D0 EA                    bne t_loop
+ 1632   3480   60                       rts
+ 1633                           
+ 1634                           ;---------------------------------------------------------------
+ 1635                           ;Convert hex nr to decimal string
+ 1636                           ;---------------------------------------------------------------
+ 1637                           
+ 1638   3481                    hex2dec:
+ 1639   3481   8E B1 34                 stx digits
+ 1640   3484   8C B2 34                 sty digits+1
+ 1641   3487   A2 30                    ldx #'0'
+ 1642   3489   8E B3 34                 stx digits+2
+ 1643   348C   8E B4 34                 stx digits+3
+ 1644                           
+ 1645   348F   38                       sec
+ 1646   3490                    chk100:
+ 1647   3490   E9 64                    sbc #100
+ 1648   3492   90 06                    bcc goon10
+ 1649   3494   EE B3 34                 inc digits+2
+ 1650   3497   4C 90 34                 jmp chk100
+ 1651   349A                    goon10:
+ 1652   349A   18                       clc
+ 1653   349B   69 64                    adc #100
+ 1654   349D                                    
+ 1655   349D   38                       sec
+ 1656   349E                    chk10:
+ 1657   349E   E9 0A                    sbc #10
+ 1658   34A0   90 06                    bcc go_on1
+ 1659   34A2   EE B4 34                 inc digits+3
+ 1660   34A5   4C 9E 34                 jmp chk10
+ 1661   34A8                    go_on1:
+ 1662   34A8   18                       clc
+ 1663   34A9   69 3A                    adc #10+'0'
+ 1664   34AB   8D B5 34                 sta digits+4
+ 1665                           
+ 1666   34AE   20 76 39                 jsr PUTSTRING
+ 1667   34B1   00 00 00 00 00   digits  .db 0,0,0,0,0,0
+        34B6   00 
+ 1668   34B7   EA                       nop
+ 1669                           
+ 1670   34B8   60                       rts
+ 1671                           
+ 1672                           ;===============================================================
+ 1673                           ;ROUTINES
+ 1674                           ;===============================================================
+ 1675                           
+ 1676                           ;---------------------------------------------------------------
+ 1677                           ;CLEAR
+ 1678                           ; Clear screen 4
+ 1679                           ;---------------------------------------------------------------
+ 1680                           ; input : -
+ 1681                           ; output: -
+ 1682                           ;
+ 1683                           ; reg.  : a,x,y
+ 1684                           ;---------------------------------------------------------------
+ 1685                           
+ 1686          0060             scr_adr  equ tmp
+ 1687                           
+ 1688   34B9                    clear:  
+ 1689   34B9   A9 F0                    lda #$F0        ; Clear4
+ 1690   34BB   8D 00 B0                 sta MODESEL
+ 1691                           
+ 1692   34BE   A9 80                    lda #$80
+ 1693   34C0   85 61                    sta scr_adr+1
+ 1694   34C2   A9 00                    lda #0
+ 1695   34C4   85 60                    sta scr_adr
+ 1696   34C6   A8                       tay
+ 1697   34C7                    clrloop:
+ 1698   34C7   91 60                    sta (scr_adr),y  ; Clear byte
+ 1699   34C9   C8                       iny
+ 1700   34CA   D0 FB                    bne clrloop
+ 1701   34CC   E6 61                    inc scr_adr+1
+ 1702   34CE   A6 61                    ldx scr_adr+1
+ 1703   34D0   E0 98                    cpx #$98
+ 1704   34D2   D0 F3                    bne clrloop
+ 1705   34D4   60                       rts
+ 1706                           
+ 1707                           ;---------------------------------------------------------------
+ 1708                           ;SET_RASTER
+ 1709                           ; Set raster 32 x 20 chars on screen
+ 1710                           ;---------------------------------------------------------------
+ 1711                           ; input : -
+ 1712                           ; output: -
+ 1713                           ;
+ 1714                           ; reg.  : a,x,y
+ 1715                           ;---------------------------------------------------------------
+ 1716                           
+ 1717          0060             row_ptr    equ tmp
+ 1718          0061             col_ptr    equ tmp+1
+ 1719                           
+ 1720   34D5                    set_raster: 
+ 1721   34D5   A9 13                    lda #19
+ 1722   34D7   85 60                    sta row_ptr     ; y-ptr
+ 1723   34D9                    yloop:
+ 1724   34D9   A9 1F                    lda #31
+ 1725   34DB   85 61                    sta col_ptr     ; x-ptr
+ 1726   34DD                    xloop:
+ 1727   34DD   A9 00                    lda #0          ; char(0)
+ 1728   34DF   A6 61                    ldx col_ptr
+ 1729   34E1   A4 60                    ldy row_ptr
+ 1730   34E3   20 A7 39                 jsr PUTCHAR
+ 1731   34E6   C6 61                    dec col_ptr
+ 1732   34E8   10 F3                    bpl xloop
+ 1733   34EA   C6 60                    dec row_ptr
+ 1734   34EC   10 EB                    bpl yloop
+ 1735                           
+ 1736   34EE   60                       rts
+ 1737                           
+ 1738                           ;---------------------------------------------------------------
+ 1739                           ;CLR_LEV
+ 1740                           ; Clear uncompressed level
+ 1741                           ;---------------------------------------------------------------
+ 1742                           ; input : -
+ 1743                           ; output: -
+ 1744                           ;
+ 1745                           ; reg.  : a,y
+ 1746                           ;---------------------------------------------------------------
+ 1747                           
+ 1748          0060             adr     equ tmp
+ 1749          0062             cnt     equ tmp+2
+ 1750                           
+ 1751   34EF                    clr_lev:
+ 1752   34EF   A9 00                    lda #<data_adr
+ 1753   34F1   85 60                    sta adr
+ 1754   34F3   A9 50                    lda #>data_adr
+ 1755   34F5   18                       clc
+ 1756   34F6   65 88                    adc LEVEL
+ 1757   34F8   65 88                    adc LEVEL
+ 1758   34FA   65 88                    adc LEVEL
+ 1759   34FC   85 61                    sta adr+1
+ 1760                           
+ 1761   34FE   A9 00                    lda #0
+ 1762   3500   85 62                    sta cnt
+ 1763   3502   85 63                    sta cnt+1
+ 1764                           
+ 1765   3504   A0 00                    ldy #0
+ 1766   3506                    clr_loop:
+ 1767   3506   A9 00                    lda #0
+ 1768   3508   91 60                    sta (adr),y
+ 1769                           
+ 1770   350A   E6 60                    inc adr
+ 1771   350C   D0 02                    bne clu1
+ 1772   350E   E6 61                    inc adr+1
+ 1773   3510                    clu1:
+ 1774   3510   E6 62                    inc cnt
+ 1775   3512   D0 02                    bne clu2
+ 1776   3514   E6 63                    inc cnt+1
+ 1777   3516                    clu2:
+ 1778   3516   A5 63                    lda cnt+1
+ 1779   3518   C9 02                    cmp #>640
+ 1780   351A   D0 EA                    bne clr_loop
+ 1781   351C   A5 62                    lda cnt
+ 1782   351E   C9 80                    cmp #<640
+ 1783   3520   D0 E4                    bne clr_loop
+ 1784                           
+ 1785   3522   4C 9F 2C                 jmp upd_scr
+ 1786   3525                            
+ 1787                           ;---------------------------------------------------------------
+ 1788                           ;WAIT_TIME
+ 1789                           ; Wait a while
+ 1790                           ;---------------------------------------------------------------
+ 1791                           ; input : -
+ 1792                           ; output: -
+ 1793                           ;
+ 1794                           ; reg.  : -
+ 1795                           ;---------------------------------------------------------------
+ 1796                           
+ 1797   3525                    wait_time:
+ 1798   3525   20 66 FE                 jsr WAITSYNC 
+ 1799   3528   20 66 FE                 jsr WAITSYNC
+ 1800   352B   4C 66 FE                 jmp WAITSYNC
+ 1801                           
+ 1802   352E                                   include scrtab.inc
+ 1803                           ;Screen Y lookup table - low bytes first
+ 1804   352E   00 20 40 60 80   ytab1:  .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        3533   A0 C0 E0 00 20 
+        3538   40 60 80 A0 C0 
+        353D   E0 
+ 1805   353E   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        3543   A0 C0 E0 00 20 
+        3548   40 60 80 A0 C0 
+        354D   E0 
+ 1806   354E   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        3553   A0 C0 E0 00 20 
+        3558   40 60 80 A0 C0 
+        355D   E0 
+ 1807   355E   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        3563   A0 C0 E0 00 20 
+        3568   40 60 80 A0 C0 
+        356D   E0 
+ 1808   356E   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        3573   A0 C0 E0 00 20 
+        3578   40 60 80 A0 C0 
+        357D   E0 
+ 1809   357E   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        3583   A0 C0 E0 00 20 
+        3588   40 60 80 A0 C0 
+        358D   E0 
+ 1810   358E   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        3593   A0 C0 E0 00 20 
+        3598   40 60 80 A0 C0 
+        359D   E0 
+ 1811   359E   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        35A3   A0 C0 E0 00 20 
+        35A8   40 60 80 A0 C0 
+        35AD   E0 
+ 1812   35AE   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        35B3   A0 C0 E0 00 20 
+        35B8   40 60 80 A0 C0 
+        35BD   E0 
+ 1813   35BE   00 20 40 60 80           .BYTE $00,$20,$40,$60,$80,$a0,$c0,$e0,$00,$20,$40,$60,$80,$a0,$c0,$e0
+        35C3   A0 C0 E0 00 20 
+        35C8   40 60 80 A0 C0 
+        35CD   E0 
+ 1814                           
+ 1815                           ;Then high bytes
+ 1816   35CE   00 00 00 00 00   ytab2:  .BYTE $00,$00,$00,$00,$00,$00,$00,$00,$01,$01,$01,$01,$01,$01,$01,$01
+        35D3   00 00 00 01 01 
+        35D8   01 01 01 01 01 
+        35DD   01 
+ 1817   35DE   02 02 02 02 02           .BYTE $02,$02,$02,$02,$02,$02,$02,$02,$03,$03,$03,$03,$03,$03,$03,$03
+        35E3   02 02 02 03 03 
+        35E8   03 03 03 03 03 
+        35ED   03 
+ 1818   35EE   04 04 04 04 04           .BYTE $04,$04,$04,$04,$04,$04,$04,$04,$05,$05,$05,$05,$05,$05,$05,$05
+        35F3   04 04 04 05 05 
+        35F8   05 05 05 05 05 
+        35FD   05 
+ 1819   35FE   06 06 06 06 06           .BYTE $06,$06,$06,$06,$06,$06,$06,$06,$07,$07,$07,$07,$07,$07,$07,$07
+        3603   06 06 06 07 07 
+        3608   07 07 07 07 07 
+        360D   07 
+ 1820   360E   08 08 08 08 08           .BYTE $08,$08,$08,$08,$08,$08,$08,$08,$09,$09,$09,$09,$09,$09,$09,$09
+        3613   08 08 08 09 09 
+        3618   09 09 09 09 09 
+        361D   09 
+ 1821   361E   0A 0A 0A 0A 0A           .BYTE $0a,$0a,$0a,$0a,$0a,$0a,$0a,$0a,$0b,$0b,$0b,$0b,$0b,$0b,$0b,$0b
+        3623   0A 0A 0A 0B 0B 
+        3628   0B 0B 0B 0B 0B 
+        362D   0B 
+ 1822   362E   0C 0C 0C 0C 0C           .BYTE $0c,$0c,$0c,$0c,$0c,$0c,$0c,$0c,$0d,$0d,$0d,$0d,$0d,$0d,$0d,$0d
+        3633   0C 0C 0C 0D 0D 
+        3638   0D 0D 0D 0D 0D 
+        363D   0D 
+ 1823   363E   0E 0E 0E 0E 0E           .BYTE $0e,$0e,$0e,$0e,$0e,$0e,$0e,$0e,$0f,$0f,$0f,$0f,$0f,$0f,$0f,$0f
+        3643   0E 0E 0E 0F 0F 
+        3648   0F 0F 0F 0F 0F 
+        364D   0F 
+ 1824   364E   10 10 10 10 10           .BYTE $10,$10,$10,$10,$10,$10,$10,$10,$11,$11,$11,$11,$11,$11,$11,$11
+        3653   10 10 10 11 11 
+        3658   11 11 11 11 11 
+        365D   11 
+ 1825   365E   12 12 12 12 12           .BYTE $12,$12,$12,$12,$12,$12,$12,$12,$13,$13,$13,$13,$13,$13,$13,$13
+        3663   12 12 12 13 13 
+        3668   13 13 13 13 13 
+        366D   13 
+ 1826                           
+ 1827   366E   00 20 40 60 80   scrptr: .BYTE $00,$20,$40,$60,$80,$A0,$C0,$e0
+        3673   A0 C0 E0 
+ 1828                           
+ 1829   3676                                   include font-ed.inc
+ 1830                           ;Font file for ASCII chars 32-128
+ 1831                           
+ 1832   3676                    font:
+ 1833                           ;special chars
+ 1834   3676   00 80 00 80 00   .db $00,$80,$00,$80,$00,$80,$00,$aa ; spr0  raster
+        367B   80 00 AA 
+ 1835   367E   18 18 18 1F 1F   .db $18,$18,$18,$1f,$1f,$18,$18,$18 ; spr1  T-left
+        3683   18 18 18 
+ 1836   3686   18 18 18 F8 F8   .db $18,$18,$18,$f8,$f8,$18,$18,$18 ; spr2  T-right
+        368B   18 18 18 
+ 1837   368E   00 00 00 FF FF   .db $00,$00,$00,$ff,$ff,$00,$00,$00 ; spr3  line hor
+        3693   00 00 00 
+ 1838   3696   18 18 18 F8 F8   .db $18,$18,$18,$f8,$f8,$00,$00,$00 ; spr4  corner rb
+        369B   00 00 00 
+ 1839   369E   00 00 00 1F 1F   .db $00,$00,$00,$1f,$1f,$18,$18,$18 ; spr5  corner lt
+        36A3   18 18 18 
+ 1840   36A6   00 00 00 F8 F8   .db $00,$00,$00,$f8,$f8,$18,$18,$18 ; spr6  corner rt
+        36AB   18 18 18 
+ 1841   36AE   18 18 18 1F 1F   .db $18,$18,$18,$1f,$1f,$00,$00,$00 ; spr7  corner lb
+        36B3   00 00 00 
+ 1842   36B6   18 18 18 18 18   .db $18,$18,$18,$18,$18,$18,$18,$18 ; spr8  line ver
+        36BB   18 18 18 
+ 1843   36BE   FF FB F9 80 F9   .db $ff,$fb,$f9,$80,$f9,$fb,$ff,$ff ; spr9  arrow right
+        36C3   FB FF FF 
+ 1844   36C6   FF EF CF 80 CF   .db $ff,$ef,$cf,$80,$cf,$ef,$ff,$ff ; spr10 arrow left
+        36CB   EF FF FF 
+ 1845   36CE   10 38 7C 10 10   .db $10,$38,$7c,$10,$10,$10,$10,$00 ; spr11 arrow up
+        36D3   10 10 00 
+ 1846   36D6   FF FF C3 DF C7   .db $ff,$ff,$c3,$df,$c7,$df,$c3,$ff ; spr12 enemie
+        36DB   DF C3 FF 
+ 1847   36DE   08 1C 3E 00 00   .db $08,$1c,$3e,$00,$00,$3e,$1c,$08 ; spr13 up-down
+        36E3   3E 1C 08 
+ 1848   36E6   FF FF E7 DB DB   .db $ff,$ff,$e7,$db,$db,$db,$e7,$ff ; spr14 inv 0
+        36EB   DB E7 FF 
+ 1849   36EE   FF FF E7 F7 F7   .db $ff,$ff,$e7,$f7,$f7,$f7,$f7,$ff ; spr15 inv 1
+        36F3   F7 F7 FF 
+ 1850   36F6   FF FF E7 DB F7   .db $ff,$ff,$e7,$db,$f7,$ef,$c3,$ff ; spr16 inv 2
+        36FB   EF C3 FF 
+ 1851   36FE   FF FF C7 FB F7   .db $ff,$ff,$c7,$fb,$f7,$fb,$c7,$ff ; spr17 inv 3
+        3703   FB C7 FF 
+ 1852   3706   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr18
+        370B   00 00 00 
+ 1853   370E   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr19
+        3713   00 00 00 
+ 1854   3716   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr20
+        371B   00 00 00 
+ 1855   371E   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr21
+        3723   00 00 00 
+ 1856   3726   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr22
+        372B   00 00 00 
+ 1857   372E   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr23
+        3733   00 00 00 
+ 1858   3736   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr24
+        373B   00 00 00 
+ 1859   373E   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr25
+        3743   00 00 00 
+ 1860   3746   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr26
+        374B   00 00 00 
+ 1861   374E   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr27
+        3753   00 00 00 
+ 1862   3756   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr28
+        375B   00 00 00 
+ 1863   375E   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr29
+        3763   00 00 00 
+ 1864   3766   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; spr30
+        376B   00 00 00 
+ 1865   376E   00 98 18 FE 7E   .db $00,$98,$18,$fe,$7e,$98,$18,$aa ; spr31 cross
+        3773   98 18 AA 
+ 1866                           
+ 1867                           ;ascii chars
+ 1868   3776   00 00 00 00 00   .db $00,$00,$00,$00,$00,$00,$00,$00 ; space 
+        377B   00 00 00 
+ 1869   377E   30 78 78 78 30   .db $30,$78,$78,$78,$30,$00,$30,$00 ; !
+        3783   00 30 00 
+ 1870   3786   6C 6C 6C 00 00   .db $6C,$6C,$6C,$00,$00,$00,$00,$00 ; "
+        378B   00 00 00 
+ 1871   378E   6C 6C FE 6C FE   .db $6C,$6C,$FE,$6C,$FE,$6C,$6C,$00 ; #
+        3793   6C 6C 00 
+ 1872   3796   30 7C C0 78 0C   .db $30,$7C,$C0,$78,$0C,$F8,$30,$00 ; $
+        379B   F8 30 00 
+ 1873   379E   00 C6 CC 18 30   .db $00,$C6,$CC,$18,$30,$66,$C6,$00 ; %
+        37A3   66 C6 00 
+ 1874   37A6   38 6C 38 76 DC   .db $38,$6C,$38,$76,$DC,$CC,$76,$00 ; &
+        37AB   CC 76 00 
+ 1875   37AE   60 60 00 00 00   .db $60,$60,$00,$00,$00,$00,$00,$00 ; '
+        37B3   00 00 00 
+ 1876   37B6   18 30 60 60 60   .db $18,$30,$60,$60,$60,$30,$18,$00 ; (
+        37BB   30 18 00 
+ 1877   37BE   60 30 18 18 18   .db $60,$30,$18,$18,$18,$30,$60,$00 ; )
+        37C3   30 60 00 
+ 1878   37C6   00 66 3C FF 3C   .db $00,$66,$3C,$FF,$3C,$66,$00,$00 ; *
+        37CB   66 00 00 
+ 1879   37CE   00 30 30 FC 30   .db $00,$30,$30,$FC,$30,$30,$00,$00 ; +
+        37D3   30 00 00 
+ 1880   37D6   00 00 00 00 00   .db $00,$00,$00,$00,$00,$30,$30,$60 ; ,
+        37DB   30 30 60 
+ 1881   37DE   00 00 00 FC 00   .db $00,$00,$00,$FC,$00,$00,$00,$00 ; -
+        37E3   00 00 00 
+ 1882   37E6   00 00 00 00 00   .db $00,$00,$00,$00,$00,$30,$30,$00 ; .
+        37EB   30 30 00 
+ 1883   37EE   06 0C 18 30 60   .db $06,$0C,$18,$30,$60,$C0,$80,$00 ; /
+        37F3   C0 80 00 
+ 1884                           
+ 1885   37F6                    livenum:
+ 1886   37F6   3E 71 71 71 71   .db $3E,$71,$71,$71,$71,$71,$3E,$00 ; 0
+        37FB   71 3E 00 
+ 1887   37FE   3C 1C 1C 1C 1C   .db $3C,$1C,$1C,$1C,$1C,$1C,$1C,$00 ; 1
+        3803   1C 1C 00 
+ 1888   3806   7E 07 07 3E 70   .db $7E,$07,$07,$3E,$70,$70,$7F,$00 ; 2
+        380B   70 7F 00 
+ 1889   380E   3E 47 07 1E 07   .db $3E,$47,$07,$1E,$07,$47,$3E,$00 ; 3
+        3813   47 3E 00 
+ 1890   3816   1E 2E 4E 4E 4E   .db $1E,$2E,$4E,$4E,$4E,$7F,$0E,$00 ; 4
+        381B   7F 0E 00 
+ 1891   381E   7F 70 70 7E 07   .db $7F,$70,$70,$7E,$07,$07,$7E,$00 ; 5
+        3823   07 7E 00 
+ 1892   3826   3F 70 70 7E 47   .db $3F,$70,$70,$7E,$47,$47,$3E,$00 ; 6
+        382B   47 3E 00 
+ 1893   382E   7F 47 0E 0E 1C   .db $7F,$47,$0E,$0E,$1C,$1C,$1C,$00 ; 7
+        3833   1C 1C 00 
+ 1894   3836   3E 71 71 3E 47   .db $3E,$71,$71,$3E,$47,$47,$3E,$00 ; 8
+        383B   47 3E 00 
+ 1895   383E   3E 71 71 3F 07   .db $3E,$71,$71,$3F,$07,$07,$7E,$00 ; 9
+        3843   07 7E 00 
+ 1896   3846   00 30 30 00 00   .db $00,$30,$30,$00,$00,$30,$30,$00 ; :
+        384B   30 30 00 
+ 1897   384E   00 30 30 00 00   .db $00,$30,$30,$00,$00,$30,$30,$60 ; ;
+        3853   30 30 60 
+ 1898   3856   18 30 60 C0 60   .db $18,$30,$60,$C0,$60,$30,$18,$00 ; <
+        385B   30 18 00 
+ 1899   385E   00 00 FC 00 00   .db $00,$00,$FC,$00,$00,$FC,$00,$00 ; =
+        3863   FC 00 00 
+ 1900   3866   60 30 18 0C 18   .db $60,$30,$18,$0C,$18,$30,$60,$00 ; >
+        386B   30 60 00 
+ 1901   386E   78 CC 0C 18 30   .db $78,$CC,$0C,$18,$30,$00,$30,$00 ; ?
+        3873   00 30 00 
+ 1902   3876   7C C6 DE DE DE   .db $7C,$C6,$DE,$DE,$DE,$C0,$78,$00 ; @
+        387B   C0 78 00 
+ 1903   387E   3E 47 47 47 7F   .db $3E,$47,$47,$47,$7F,$47,$47,$00 ; A
+        3883   47 47 00 
+ 1904   3886   7E 71 71 7E 71   .db $7E,$71,$71,$7E,$71,$71,$7E,$00 ; B
+        388B   71 7E 00 
+ 1905   388E   3F 70 70 70 70   .db $3F,$70,$70,$70,$70,$70,$3F,$00 ; C
+        3893   70 3F 00 
+ 1906   3896   7E 47 47 47 47   .db $7E,$47,$47,$47,$47,$47,$7E,$00 ; D
+        389B   47 7E 00 
+ 1907   389E   7F 70 70 7F 70   .db $7F,$70,$70,$7F,$70,$70,$7F,$00 ; E
+        38A3   70 7F 00 
+ 1908   38A6   7F 70 70 7F 70   .db $7F,$70,$70,$7F,$70,$70,$70,$00 ; F
+        38AB   70 70 00 
+ 1909   38AE   3E 47 40 5F 47   .db $3E,$47,$40,$5F,$47,$47,$3E,$00 ; G
+        38B3   47 3E 00 
+ 1910   38B6   71 71 71 7F 71   .db $71,$71,$71,$7F,$71,$71,$71,$00 ; H
+        38BB   71 71 00 
+ 1911   38BE   1C 1C 1C 1C 1C   .db $1C,$1C,$1C,$1C,$1C,$1C,$1C,$00 ; I
+        38C3   1C 1C 00 
+ 1912   38C6   1C 1C 1C 1C 1C   .db $1C,$1C,$1C,$1C,$1C,$1C,$78,$00 ; J
+        38CB   1C 78 00 
+ 1913   38CE   71 72 74 7C 4E   .db $71,$72,$74,$7C,$4E,$47,$47,$00 ; K
+        38D3   47 47 00 
+ 1914   38D6   70 70 70 70 70   .db $70,$70,$70,$70,$70,$70,$7F,$00 ; L
+        38DB   70 7F 00 
+ 1915   38DE   7E 5B 5B 5B 5B   .db $7E,$5B,$5B,$5B,$5B,$5B,$5B,$00 ; M
+        38E3   5B 5B 00 
+ 1916   38E6   7E 47 47 47 47   .db $7E,$47,$47,$47,$47,$47,$47,$00 ; N
+        38EB   47 47 00 
+ 1917   38EE   3E 71 71 71 71   .db $3E,$71,$71,$71,$71,$71,$3E,$00 ; O
+        38F3   71 3E 00 
+ 1918   38F6   7E 71 71 71 7E   .db $7E,$71,$71,$71,$7E,$70,$70,$00 ; P
+        38FB   70 70 00 
+ 1919   38FE   3E 71 71 71 73   .db $3E,$71,$71,$71,$73,$73,$3F,$00 ; Q
+        3903   73 3F 00 
+ 1920   3906   7E 71 71 7E 47   .db $7E,$71,$71,$7E,$47,$47,$47,$00 ; R
+        390B   47 47 00 
+ 1921   390E   3E 71 70 3E 07   .db $3E,$71,$70,$3E,$07,$47,$3E,$00 ; S
+        3913   47 3E 00 
+ 1922   3916   7F 1C 1C 1C 1C   .db $7F,$1C,$1C,$1C,$1C,$1C,$1C,$00 ; T
+        391B   1C 1C 00 
+ 1923   391E   71 71 71 71 71   .db $71,$71,$71,$71,$71,$71,$3E,$00 ; U
+        3923   71 3E 00 
+ 1924   3926   71 71 71 71 3E   .db $71,$71,$71,$71,$3E,$1C,$08,$00 ; V
+        392B   1C 08 00 
+ 1925   392E   6D 6D 6D 6D 6D   .db $6D,$6D,$6D,$6D,$6D,$6D,$3E,$00 ; W
+        3933   6D 3E 00 
+ 1926   3936   71 72 3C 1C 1E   .db $71,$72,$3C,$1C,$1E,$27,$47,$00 ; X
+        393B   27 47 00 
+ 1927   393E   71 71 71 3E 1C   .db $71,$71,$71,$3E,$1C,$1C,$1C,$00 ; Y
+        3943   1C 1C 00 
+ 1928   3946   7F 07 0E 1C 38   .db $7F,$07,$0E,$1C,$38,$70,$7F,$00 ; Z
+        394B   70 7F 00 
+ 1929   394E   78 60 60 60 60   .db $78,$60,$60,$60,$60,$60,$78,$00 ; [
+        3953   60 78 00 
+ 1930   3956   C0 60 30 18 0C   .db $C0,$60,$30,$18,$0C,$06,$02,$00 ; \
+        395B   06 02 00 
+ 1931   395E   78 18 18 18 18   .db $78,$18,$18,$18,$18,$18,$78,$00 ; ]
+        3963   18 78 00 
+ 1932   3966   10 38 6C C6 00   .db $10,$38,$6C,$C6,$00,$00,$00,$00 ; ^
+        396B   00 00 00 
+ 1933   396E   18 18 18 18 18   .db $18,$18,$18,$18,$18,$18,$18,$18 ; _=|
+        3973   18 18 18 
+ 1934                           ;.db $30,$30,$18,$00,$00,$00,$00,$00 ; `
+ 1935                           ;.db $00,$00,$3E,$06,$3E,$26,$3E,$00 ; a
+ 1936                           ;.db $30,$30,$3E,$26,$26,$26,$3E,$00 ; b
+ 1937                           ;.db $00,$00,$3E,$30,$30,$30,$3E,$00 ; c
+ 1938                           ;.db $06,$06,$3E,$26,$26,$26,$3E,$00 ; d
+ 1939                           ;.db $00,$00,$3E,$26,$3E,$20,$3E,$00 ; e
+ 1940                           ;.db $1C,$10,$3E,$18,$18,$18,$18,$00 ; f
+ 1941                           ;.db $00,$00,$3E,$34,$34,$1E,$26,$3E ; g
+ 1942                           ;.db $30,$30,$3E,$26,$26,$26,$26,$00 ; h
+ 1943                           ;.db $0C,$00,$0C,$0C,$0C,$0C,$0C,$00 ; i
+ 1944                           ;.db $0C,$00,$0C,$0C,$0C,$0C,$04,$1C ; j
+ 1945                           ;.db $30,$30,$32,$34,$3C,$26,$26,$00 ; k
+ 1946                           ;.db $0C,$0C,$0C,$0C,$0C,$0C,$0C,$00 ; l
+ 1947                           ;.db $00,$00,$7F,$5B,$5B,$5B,$5B,$00 ; m
+ 1948                           ;.db $00,$00,$3E,$26,$26,$26,$26,$00 ; n
+ 1949                           ;.db $00,$00,$3E,$26,$26,$26,$3E,$00 ; o
+ 1950                           ;.db $00,$00,$3E,$32,$32,$32,$3E,$30 ; p
+ 1951                           ;.db $00,$00,$3E,$32,$32,$32,$3E,$06 ; q
+ 1952                           ;.db $00,$00,$34,$38,$30,$30,$30,$00 ; r
+ 1953                           ;.db $00,$00,$3E,$30,$3E,$06,$3E,$00 ; s
+ 1954                           ;.db $04,$04,$3E,$0C,$0C,$0C,$0C,$00 ; t
+ 1955                           ;.db $00,$00,$32,$32,$32,$32,$3E,$00 ; u
+ 1956                           ;.db $00,$00,$32,$32,$32,$1C,$08,$00 ; v
+ 1957                           ;.db $00,$00,$6D,$6D,$6D,$6D,$7F,$00 ; w
+ 1958                           ;.db $00,$00,$32,$34,$1C,$16,$26,$00 ; x
+ 1959                           ;.db $00,$00,$32,$32,$32,$32,$3E,$06 ; y
+ 1960                           ;.db $00,$00,$3E,$0E,$1C,$38,$3E,$00 ; z
+ 1961                           ;.db $1C,$30,$30,$E0,$30,$30,$1C,$00 ; {
+ 1962                           ;.db $18,$18,$18,$18,$18,$18,$18,$18 ; |
+ 1963                           ;.db $E0,$30,$30,$1C,$30,$30,$E0,$00 ; }
+ 1964                           ;.db $00,$00,$00,$00,$00,$00,$00,$00 ; ~
+ 1965                           ;.db $00,$00,$00,$00,$00,$00,$00,$00 ; 
+ 1966                           
+ 1967                           ;======================================================================
+ 1968                           ;FONT ROUTINES:
+ 1969                           ;======================================================================
+ 1970                           ;PUTSTRING
+ 1971                           ; - x,y,string,0
+ 1972                           ; - x,y,string,0
+ 1973                           ; - $ea
+ 1974                           ;
+ 1975                           ;PUTCHAR x,y,a
+ 1976                           ;======================================================================
+ 1977          0070             XPOS     equ $70
+ 1978          0071             YPOS     equ $71
+ 1979                           
+ 1980   3976                    PUTSTRING:
+ 1981   3976   68                   pla            ; Save return address
+ 1982   3977   85 E8                sta $e8
+ 1983   3979   68                   pla
+ 1984   397A   85 E9                sta $e9
+ 1985                           
+ 1986   397C   A0 00                ldy #$0
+ 1987   397E                    P_S_0:
+ 1988   397E   20 A0 39             jsr PTR_INC    ; Point to character string
+ 1989   3981   B1 E8                lda ($e8),y    ; Check end of printing
+ 1990   3983   30 18                bmi P_S_4
+ 1991                           
+ 1992   3985                    P_S_1:
+ 1993   3985   85 70                sta XPOS       ; Save x,y,attribute
+ 1994   3987   20 A0 39             jsr PTR_INC
+ 1995   398A   B1 E8                lda ($e8),y
+ 1996   398C   85 71                sta YPOS
+ 1997                           
+ 1998   398E                    P_S_2:
+ 1999   398E   20 A0 39             jsr PTR_INC    ; Print character until 0
+ 2000   3991   B1 E8                lda ($e8),y
+ 2001   3993   F0 E9                beq P_S_0
+ 2002   3995   20 AB 39             jsr PRINTCHAR
+ 2003   3998   E6 70                inc XPOS
+ 2004   399A   4C 8E 39             jmp P_S_2
+ 2005                           
+ 2006   399D                    P_S_4:
+ 2007   399D   6C E8 00             jmp ($e8)      ; Return to program
+ 2008                           
+ 2009                           PTR_INC:           ; Increment textpointer
+ 2010   39A0   E6 E8                inc $e8
+ 2011   39A2   D0 02                bne PTR_1
+ 2012   39A4   E6 E9                inc $e9
+ 2013   39A6                    PTR_1:
+ 2014   39A6   60                   rts
+ 2015                           
+ 2016                           ;----------------------------------------------------------------------
+ 2017          0073             SCR      equ $73
+ 2018          0075             CHR      equ $75
+ 2019          0077             TMP_Y    equ $77
+ 2020                           
+ 2021   39A7                    PUTCHAR:
+ 2022   39A7   86 70                stx XPOS
+ 2023   39A9   84 71                sty YPOS
+ 2024                           
+ 2025   39AB                    PRINTCHAR:
+ 2026   39AB   85 75                sta CHR        ; Calculate characterspritedata address
+ 2027   39AD   A9 00                lda #0         ; = A * 8 + charsprite data address
+ 2028   39AF   85 76                sta CHR+1
+ 2029   39B1   06 75                asl CHR
+ 2030   39B3   26 76                rol CHR+1
+ 2031   39B5   06 75                asl CHR
+ 2032   39B7   26 76                rol CHR+1
+ 2033   39B9   06 75                asl CHR
+ 2034   39BB   26 76                rol CHR+1
+ 2035   39BD   A5 75                lda CHR
+ 2036   39BF   18                   clc
+ 2037   39C0   69 76                adc #<font
+ 2038   39C2   85 75                sta CHR
+ 2039   39C4   A5 76                lda CHR+1
+ 2040   39C6   69 36                adc #>font
+ 2041   39C8   85 76                sta CHR+1
+ 2042   39CA                        
+ 2043   39CA   A5 70                lda XPOS       ; Calculate screenaddress
+ 2044   39CC   85 73                sta SCR
+ 2045   39CE   A5 71                lda YPOS
+ 2046   39D0   18                   clc
+ 2047   39D1   69 80                adc #$80
+ 2048   39D3   85 74                sta SCR+1
+ 2049   39D5                     
+ 2050   39D5   84 77                sty TMP_Y
+ 2051   39D7   A2 00                ldx #0
+ 2052   39D9   A0 00                ldy #0         ; Put character on screen
+ 2053   39DB                    P_C_1:
+ 2054   39DB   B1 75                lda (CHR),y
+ 2055                           ;    eor (SCR),y
+ 2056   39DD   91 73                sta (SCR),y
+ 2057   39DF   E6 75                inc CHR
+ 2058   39E1   D0 02                bne P_C_2
+ 2059   39E3   E6 76                inc CHR+1
+ 2060   39E5                    P_C_2:
+ 2061   39E5   A5 73                lda SCR
+ 2062   39E7   18                   clc
+ 2063   39E8   69 20                adc #$20
+ 2064   39EA   85 73                sta SCR
+ 2065   39EC   A5 74                lda SCR+1
+ 2066   39EE   69 00                adc #0
+ 2067   39F0   85 74                sta SCR+1
+ 2068   39F2   E8                   inx
+ 2069   39F3   E0 08                cpx #8
+ 2070   39F5   D0 E4                bne P_C_1
+ 2071                           
+ 2072   39F7   A4 77                ldy TMP_Y
+ 2073   39F9   60                   rts
+ 2074   39FA                     
+ 2075   39FA                    INV_CURSOR:
+ 2076   39FA   86 73                stx SCR
+ 2077   39FC   98                   tya
+ 2078   39FD   18                   clc
+ 2079   39FE   69 80                adc #$80
+ 2080   3A00   85 74                sta SCR+1
+ 2081   3A02                     
+ 2082   3A02   A0 00                ldy #0         ; Put character on screen
+ 2083   3A04                    IC1:
+ 2084   3A04   B1 73                lda (SCR),y
+ 2085   3A06   49 FF                eor #$ff
+ 2086   3A08   91 73                sta (SCR),y
+ 2087   3A0A   98                   tya
+ 2088   3A0B   18                   clc
+ 2089   3A0C   69 20                adc #$20
+ 2090   3A0E   A8                   tay
+ 2091   3A0F   D0 F3                bne IC1
+ 2092   3A11   60                   rts    
+ 2093   3A12                                   include mtiles.inc
+ 2094                           ;MONOCHROME VERSION
+ 2095                           
+ 2096   3A12                    tiles:
+ 2097   3A12   00                       .BYTE %00000000      ;Tiles - all 8x8 1 bit per pixel, so easy to change!
+ 2098   3A13   00                       .BYTE %00000000      ;This one is air
+ 2099   3A14   00                       .BYTE %00000000
+ 2100   3A15   00                       .BYTE %00000000
+ 2101   3A16   00                       .BYTE %00000000
+ 2102   3A17   00                       .BYTE %00000000
+ 2103   3A18   00                       .BYTE %00000000
+ 2104   3A19   00                       .BYTE %00000000
+ 2105                           
+ 2106   3A1A   FF                       .BYTE %11111111      ;Floor that can be walked and jumped through
+ 2107   3A1B   AB                       .BYTE %10101011
+ 2108   3A1C   D5                       .BYTE %11010101
+ 2109   3A1D   AB                       .BYTE %10101011
+ 2110   3A1E   D5                       .BYTE %11010101
+ 2111   3A1F   AB                       .BYTE %10101011
+ 2112   3A20   D5                       .BYTE %11010101
+ 2113   3A21   FF                       .BYTE %11111111
+ 2114                           
+ 2115   3A22   EE                       .BYTE %11101110      ;Brick wall
+ 2116   3A23   EE                       .BYTE %11101110
+ 2117   3A24   EE                       .BYTE %11101110
+ 2118   3A25   00                       .BYTE %00000000
+ 2119   3A26   77                       .BYTE %01110111
+ 2120   3A27   77                       .BYTE %01110111
+ 2121   3A28   77                       .BYTE %01110111
+ 2122   3A29   00                       .BYTE %00000000
+ 2123                           
+ 2124   3A2A   10                       .BYTE %00010000      ;Spike
+ 2125   3A2B   10                       .BYTE %00010000
+ 2126   3A2C   38                       .BYTE %00111000
+ 2127   3A2D   38                       .BYTE %00111000
+ 2128   3A2E   7C                       .BYTE %01111100
+ 2129   3A2F   7C                       .BYTE %01111100
+ 2130   3A30   FE                       .BYTE %11111110
+ 2131   3A31   FE                       .BYTE %11111110
+ 2132                           
+ 2133   3A32   0C               keyspr: .BYTE %00001100  ;Key sprite - 8x8, 1 bit per pixel
+ 2134   3A33   12                       .BYTE %00010010
+ 2135   3A34   21                       .BYTE %00100001
+ 2136   3A35   21                       .BYTE %00100001
+ 2137   3A36   12                       .BYTE %00010010
+ 2138   3A37   AC                       .BYTE %10101100
+ 2139   3A38   40                       .BYTE %01000000
+ 2140   3A39   80                       .BYTE %10000000
+ 2141                           
+ 2142   3A3A   DB               doorspr:.BYTE %11011011   ;Door sprite - 16x16, 1 bit per pixel
+ 2143   3A3B   B6                       .BYTE %10110110   ;This is stored in screen format (ie 4 8x8 chunks)
+ 2144   3A3C   6D                       .BYTE %01101101
+ 2145   3A3D   DB                       .BYTE %11011011
+ 2146   3A3E   B6                       .BYTE %10110110
+ 2147   3A3F   6D                       .BYTE %01101101
+ 2148   3A40   DB                       .BYTE %11011011
+ 2149   3A41   B6                       .BYTE %10110110
+ 2150   3A42                            
+ 2151   3A42   6D                       .BYTE %01101101
+ 2152   3A43   DB                       .BYTE %11011011
+ 2153   3A44   B6                       .BYTE %10110110
+ 2154   3A45   6D                       .BYTE %01101101
+ 2155   3A46   DB                       .BYTE %11011011
+ 2156   3A47   B6                       .BYTE %10110110
+ 2157   3A48   6D                       .BYTE %01101101
+ 2158   3A49   DB                       .BYTE %11011011
+ 2159                           
+ 2160   3A4A   6D                       .BYTE %01101101
+ 2161   3A4B   DB                       .BYTE %11011011
+ 2162   3A4C   B6                       .BYTE %10110110
+ 2163   3A4D   6D                       .BYTE %01101101
+ 2164   3A4E   DB                       .BYTE %11011011
+ 2165   3A4F   B6                       .BYTE %10110110
+ 2166   3A50   6D                       .BYTE %01101101
+ 2167   3A51   DB                       .BYTE %11011011
+ 2168   3A52                            
+ 2169   3A52   B6                       .BYTE %10110110
+ 2170   3A53   6D                       .BYTE %01101101
+ 2171   3A54   DB                       .BYTE %11011011
+ 2172   3A55   B6                       .BYTE %10110110
+ 2173   3A56   6D                       .BYTE %01101101
+ 2174   3A57   DB                       .BYTE %11011011
+ 2175   3A58   B6                       .BYTE %10110110
+ 2176   3A59   6D                       .BYTE %01101101
+ 2177                           
+ 2178                           
+ 2179                           ;               include msprites.inc
+ 2180                           ;               include levels.inc
+ 2181   3A5A                    eind_asm
+
+
+
+           Lines Assembled :  2181             Assembly Errors :  0
+
+
+
